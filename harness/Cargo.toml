@@ -1,0 +1,17 @@
+[package]
+name = "satsfarm-ln-harness"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ldk-node = "0.7.1"
+
+# Vendored 0.7.1 with BDK_WALLET_SYNC_TIMEOUT_SECS 20s -> 120s so the initial
+# BDK full scan survives Mutinynet Esplora's 429 backoff (see
+# vendor/ldk-node-0.7.1/src/config.rs). Everything else is stock 0.7.1.
+[patch.crates-io]
+ldk-node = { path = "vendor/ldk-node-0.7.1" }
+
+[[bin]]
+name = "ln_harness"
+path = "src/main.rs"

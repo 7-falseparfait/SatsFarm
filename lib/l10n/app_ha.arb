@@ -1,0 +1,126 @@
+{
+  "@@locale": "ha",
+  "appTitle": "SatsFarm",
+  "walletBalance": "Adugan Guje",
+  "receive": "Karba",
+  "send": "Aika",
+  "createGoal": "Kirkiro Manufar Noma",
+  "groupPot": "Adashin Tarrayya",
+  "onboardingTitle": "Barka da zuwa SatsFarm",
+  "createWallet": "Kirkiri walat",
+  "restoreWallet": "Mayar da walat",
+  "seasonGoals": "Manufofin kakar noma",
+  "generateAddress": "Samar da adireshin karba",
+  "generateInvoice": "Samar da takardar biyan Lightning",
+  "nodeUnavailable": "Ba a samun Lightning node a wannan dandali",
+  "lightningStatus": "Lightning: {status}",
+  "@lightningStatus": {"placeholders": {"status": {"type": "String"}}},
+  "running": "Yana aiki",
+  "stopped": "A tsaye",
+  "refreshBalance": "Sabunta ma'auni",
+  "continueButton": "Ci gaba",
+  "phaseTwoGoalsPlaceholder": "Manufofin ajiya na kakar noma za su bayyana a nan a kashi na biyu.",
+  "linuxWalletLimitation": "Adireshin karba yana aiki a nan. Sabunta ma'auni da Lightning suna bukatar tallafin Linux na musamman.",
+  "recoveryPhraseTitle": "Ajiye kalmomin dawo da walat",
+  "recoveryPhraseWarning": "Rubuta kalmomin nan a jere kuma ka boye su. Duk wanda ya mallaki kalmomin zai iya sarrafa walat din. Kada ka dauki hotonsu ko ka raba su.",
+  "iSavedPhrase": "Na rubuta kalmomin kuma na adana su lafiya",
+  "continueToWallet": "Ci gaba zuwa walat",
+  "loadingWallet": "Ana duba ko akwai walat da aka adana…",
+  "retry": "Sake gwadawa",
+  "secureStorageUnavailable": "SatsFarm bai iya karanta amintaccen ajiyar walat na wannan na'ura ba. Sake gwadawa, kuma kada ka goge bayanan manhaja ko ka cire ta sai kalmomin dawo da walat sun adana lafiya."
+  ,"greeting": "Assalamu alaikum"
+  ,"locationNorthernNigeria": "AREWACIN NAJERIYA"
+  ,"seasonLabel": "LOKACIN NOMA NA 2026"
+  ,"walletIntro": "Kuɗinka a shirye don lokacin noma."
+  ,"availableBalance": "KUƊIN DA KE SAMU"
+  ,"ngnEstimateLabel": "Kimanin darajar Naira · gwaji ne"
+  ,"mutinynetDemo": "GWADAWAR MUTINYNET"
+  ,"fieldAndSeason": "LOKACIN NOMA"
+  ,"seasonCardTitle": "Shirya girbi mai albarka"
+  ,"seasonCardBody": "Ƙirƙiri burin ajiya don iri, taki, ko kuɗin girbi."
+  ,"startPlanning": "Fara shiri"
+  ,"activityTitle": "Ayyukan walat"
+  ,"activityEmpty": "Ayyukanka za su bayyana nan idan daidaita walat ya samu."
+  ,"walletSecurityTitle": "Walat ɗinka. Ikonka."
+  ,"walletSecurityBody": "Kalmomin dawo da walat naka ne. SatsFarm ba zai iya canza su ko shiga walat ɗinka ba."
+  ,"onboardingBody": "Walat ɗin Bitcoin mai sauƙi don ajiyar noma da biyan kuɗi."
+  ,"onboardingNote": "Fara da walat ɗin gwaji. Kada ka yi amfani da Bitcoin na gaske a wannan gwaji."
+  ,"receiveOnchainTitle": "Adireshin kan sarka"
+  ,"receiveOnchainBody": "Raba wannan adireshin don karɓar Bitcoin na gwajin Mutinynet."
+  ,"receiveLightningTitle": "Takardar biyan Lightning"
+  ,"receiveLightningBody": "Ƙirƙiri takardar karɓar kuɗi ta Lightning cikin sauri."
+  ,"copyAddress": "Kwafi adireshi"
+  ,"addressCopied": "An kwafi adireshi"
+  ,"networkNoticeTitle": "Cibiyar gwajin Mutinynet"
+  ,"networkNoticeBody": "Kuɗin gwaji ba su da darajar kuɗi. Wannan sigar Linux tana ƙirƙirar adireshi, amma ba ta iya daidaita biyan kuɗi tukuna."
+  ,"phaseTwo": "ZAI ZO A KASHI NA 2"
+  ,"cancel": "Soke"
+  ,"myVouchers": "Kuponai na"
+  ,"voucherEmpty": "Babu kuponai tukuna. Ofishin SatsFarm za su turo tallafin shigo da kaya nan."
+  ,"voucherRefresh": "Sabunta daga ofishin shiri"
+  ,"vouchersGrantTotal": "KUDIN KYAUTA DA ZA A AMFANI"
+  ,"vouchersSubcopy": "Tallafin shigo da kaya daga ofishin SatsFarm. Ku yi amfani da shi a hannun 'yan kasuwa masu amincewa."
+  ,"voucherKindGrant": "KYAUTA"
+  ,"voucherKindLoan": "RASHI"
+  ,"voucherStatusActive": "YANA AIKI"
+  ,"voucherStatusSpent": "AN CI"
+  ,"voucherStatusClosed": "AN RUFE"
+  ,"voucherIssuedAmount": "An bayar da {amount}"
+  ,"voucherAmountOwed": "Adadin da ake bi: {amount}"
+  ,"@voucherAmountOwed": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  }
+  ,"voucherRedeem": "Yi amfani a shagon"
+  ,"voucherRedeemHint": "Liƙa kudin biyan BOLT11 na shagon"
+  ,"voucherScanInvoice": "Duba lambar QR ta shagon"
+  ,"voucherScanTitle": "Duba takardar biyan shagon"
+  ,"voucherScanHint": "Sanya lambar QR ta biyan Mutinynet ta shagon a cikin firam."
+  ,"voucherQrInvalid": "Wannan lambar QR ba takardar biyan Lightning ba ce. Duba lambar QR ta biyan shagon."
+  ,"voucherRedeemSubmit": "Biya shagon"
+  ,"voucherRateLabel": "Farashin misali: naira 5 a kowace sat. Mutinynet cibiyar gwaji ce."
+  ,"voucherPayingNow": "Ana biyan kudin shagon…"
+  ,"redeemSettled": "An biya shagon a Mutinynet"
+  ,"redeemStillPending": "Biyan yana matsawa tukuna…"
+  ,"redeemStillPendingBody": "Ofishin shiri yana biya shagon ta Lightning. Duba sake a dan kadan."
+  ,"redeemFailed": "Biyan ya kasa"
+  ,"redeemFailedBody": "Ofishin bai iya biyan wannan kudin ba. Babu kudin kupon da aka ci. Don Allah tabbatar da kudin da shagon."
+  ,"voucherRegisterTitle": "Rika rajistarka a shirin"
+  ,"voucherRegisterBody": "Yi rajista sau daya don karbar kuponai da biyan shaguna kai tsaye daga su."
+  ,"voucherNameLabel": "Cikakken suna"
+  ,"voucherLocationLabel": "Kauye ko gari"
+  ,"voucherRegisterAction": "Shiga shirin"
+  ,"inviteJoinTitle": "Shiga SatsFarm"
+  ,"inviteJoinBody": "Shigar da lambar gayyata ta amfani guda ɗaya daga jami'in shirin, ko duba lambar QR."
+  ,"inviteCodeLabel": "Lambar gayyata"
+  ,"inviteScanAction": "Duba lambar QR"
+  ,"inviteSubmitAction": "Shiga shirin noma"
+  ,"inviteInvalidCode": "Wannan lambar ba ta aiki. Duba ta kuma sake gwadawa."
+  ,"inviteExpiredCode": "Wannan lambar ta ƙare. Nemi sabuwar lamba daga jami'in shirin."
+  ,"inviteUsedCode": "An riga an yi amfani da wannan lambar a wata na'ura. Nemi sabuwar lamba daga jami'in shirin."
+  ,"inviteUnavailable": "Ba a iya haɗawa da SatsFarm ba. Duba haɗin yanar gizo kuma sake gwadawa."
+  ,"inviteStorageError": "SatsFarm bai iya adana amintaccen shiga a wannan na'ura ba. Sake gwadawa."
+  ,"farmerBalanceLabel": "KUDIN TALLAFIN DA SUKA SAMU"
+  ,"farmerHistoryLabel": "Tarihin tallafi"
+  ,"farmerHistoryEmpty": "Tarihin tallafinka zai bayyana a nan."
+  ,"farmerRepaymentLabel": "Biyan bashi"
+  ,"repaymentTypeGrain": "Hatsi"
+  ,"repaymentTypeCash": "Kuɗi"
+  ,"repaymentTypeTransfer": "Canja wurin kuɗi"
+  ,"farmerNoteLabel": "Bayani"
+  ,"switchFarmer": "Canja manomi"
+  ,"switchFarmerTitle": "A canja asusun manomi?"
+  ,"switchFarmerConfirm": "Wannan zai fita daga asusun manomin a wannan na'ura. Ba zai canza walat ko kalmomin dawo da walat ba."
+  ,"farmerWalletAction": "Walat dina"
+  ,"farmerRefreshAction": "Sabunta ma'auni"
+  ,"farmerWelcome": "Barka da zuwa, {name}"
+  ,"@farmerWelcome": {"placeholders": {"name": {"type": "String"}}}
+  ,"farmerSupportLabel": "Tallafin shiri"
+  ,"inviteCameraTitle": "Duba gayyatarka"
+  ,"inviteCameraHint": "Sanya lambar QR ta dashboard a cikin firam."
+  ,"inviteTestNetworkBody": "SatsFarm na amfani da Mutinynet, cibiyar gwajin Bitcoin. Kuɗin gwaji ba su da darajar kuɗi."
+  ,"checkingFarmerSession": "Ana duba shigarka ta SatsFarm…"
+}

@@ -1,0 +1,133 @@
+{
+  "@@locale": "en",
+  "appTitle": "SatsFarm",
+  "walletBalance": "Wallet Balance",
+  "receive": "Receive",
+  "send": "Send",
+  "createGoal": "Create Farm Goal",
+  "groupPot": "Cooperative Esusu",
+  "onboardingTitle": "Welcome to SatsFarm",
+  "createWallet": "Create wallet",
+  "restoreWallet": "Restore wallet",
+  "seasonGoals": "Season goals",
+  "generateAddress": "Generate receive address",
+  "generateInvoice": "Generate Lightning invoice",
+  "nodeUnavailable": "Lightning node is unavailable on this platform",
+  "lightningStatus": "Lightning: {status}",
+  "@lightningStatus": {"placeholders": {"status": {"type": "String"}}},
+  "running": "Running",
+  "stopped": "Stopped",
+  "refreshBalance": "Refresh balance",
+  "continueButton": "Continue",
+  "phaseTwoGoalsPlaceholder": "Phase 2: seasonal savings goals will appear here.",
+  "linuxWalletLimitation": "Receive addresses work locally. Balance sync and Lightning need additional Linux native wallet support.",
+  "recoveryPhraseTitle": "Back up your recovery phrase",
+  "recoveryPhraseWarning": "Write these words down in order and keep them private. Anyone with this phrase can control this wallet. Do not save it in a screenshot or share it.",
+  "iSavedPhrase": "I wrote down and safely stored these words",
+  "continueToWallet": "Continue to wallet",
+  "loadingWallet": "Checking for a saved wallet…",
+  "retry": "Retry",
+  "secureStorageUnavailable": "SatsFarm could not read this device's secure wallet storage. Retry, and do not clear app data or uninstall unless your recovery phrase is safely backed up."
+  ,"greeting": "Assalamu alaikum"
+  ,"locationNorthernNigeria": "NORTHERN NIGERIA"
+  ,"seasonLabel": "2026 FARMING SEASON"
+  ,"walletIntro": "Your money, ready for the season."
+  ,"availableBalance": "AVAILABLE BALANCE"
+  ,"ngnEstimateLabel": "Approximate NGN value · demo rate"
+  ,"mutinynetDemo": "MUTINYNET DEMO"
+  ,"fieldAndSeason": "FARM SEASON"
+  ,"seasonCardTitle": "Plan for a stronger harvest"
+  ,"seasonCardBody": "Set a savings target for seeds, fertilizer, or harvest costs."
+  ,"startPlanning": "Start planning"
+  ,"activityTitle": "Wallet activity"
+  ,"activityEmpty": "Your activity will appear here when wallet sync is available."
+  ,"walletSecurityTitle": "Your wallet. Your control."
+  ,"walletSecurityBody": "Your recovery phrase stays with you. SatsFarm cannot reset or access it."
+  ,"onboardingBody": "A simple Bitcoin wallet for farm savings and payments."
+  ,"onboardingNote": "Start with a test wallet. Never use real Bitcoin in this demo."
+  ,"receiveOnchainTitle": "On-chain address"
+  ,"receiveOnchainBody": "Share this address to receive Mutinynet test bitcoin."
+  ,"receiveLightningTitle": "Lightning invoice"
+  ,"receiveLightningBody": "Create an invoice for a fast Lightning payment."
+  ,"copyAddress": "Copy address"
+  ,"addressCopied": "Address copied"
+  ,"networkNoticeTitle": "Mutinynet test network"
+  ,"networkNoticeBody": "Test coins have no value. This Linux build can create addresses, but cannot sync payments yet."
+  ,"phaseTwo": "COMING IN PHASE 2"
+  ,"cancel": "Cancel"
+  ,"myVouchers": "My vouchers"
+  ,"voucherEmpty": "No vouchers yet. The SatsFarm desk will send input support here."
+  ,"voucherRefresh": "Refresh from program desk"
+  ,"vouchersGrantTotal": "GRANT BALANCE TO SPEND"
+  ,"vouchersSubcopy": "Input support from the SatsFarm desk. Spend it at approved dealers."
+  ,"voucherKindGrant": "GRANT"
+  ,"voucherKindLoan": "LOAN"
+  ,"voucherStatusActive": "ACTIVE"
+  ,"voucherStatusSpent": "SPENT"
+  ,"voucherStatusClosed": "CLOSED"
+  ,"voucherIssuedAmount": "{amount} issued"
+  ,"@voucherIssuedAmount": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  }
+  ,"voucherAmountOwed": "Amount owed: {amount}"
+  ,"@voucherAmountOwed": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  }
+  ,"voucherRedeem": "Redeem at dealer"
+  ,"voucherRedeemHint": "Paste the dealer's BOLT11 invoice"
+  ,"voucherScanInvoice": "Scan dealer QR code"
+  ,"voucherScanTitle": "Scan dealer invoice"
+  ,"voucherScanHint": "Hold the dealer's Mutinynet payment QR code inside the frame."
+  ,"voucherQrInvalid": "That QR code is not a valid Lightning invoice. Scan the dealer's payment QR."
+  ,"voucherRedeemSubmit": "Pay dealer"
+  ,"voucherRateLabel": "Demo rate: 5 naira per sat. Mutinynet is a test network."
+  ,"voucherPayingNow": "Paying the dealer invoice…"
+  ,"redeemSettled": "Dealer paid on Mutinynet"
+  ,"redeemStillPending": "Payment is still settling…"
+  ,"redeemStillPendingBody": "The program desk is paying the dealer over Lightning. Check again in a moment."
+  ,"redeemFailed": "Payment failed"
+  ,"redeemFailedBody": "The desk could not pay this invoice. No voucher balance was spent. Please confirm the invoice with the dealer."
+  ,"voucherRegisterTitle": "Claim your program profile"
+  ,"voucherRegisterBody": "Register once to receive vouchers and pay dealers directly from them."
+  ,"voucherNameLabel": "Full name"
+  ,"voucherLocationLabel": "Village or town"
+  ,"voucherRegisterAction": "Join the program"
+  ,"inviteJoinTitle": "Join SatsFarm"
+  ,"inviteJoinBody": "Enter the one-time invite code from your program officer, or scan their QR code."
+  ,"inviteCodeLabel": "Invite code"
+  ,"inviteScanAction": "Scan QR code"
+  ,"inviteSubmitAction": "Join my program"
+  ,"inviteInvalidCode": "That code is not valid. Check it and try again."
+  ,"inviteExpiredCode": "This code has expired. Ask your program officer for a new one."
+  ,"inviteUsedCode": "This code has already been used on another device. Ask your program officer for a new code."
+  ,"inviteUnavailable": "Could not connect to SatsFarm. Check your connection and try again."
+  ,"inviteStorageError": "SatsFarm could not save your secure sign-in on this device. Please try again."
+  ,"farmerBalanceLabel": "SUPPORT BALANCE"
+  ,"farmerHistoryLabel": "Support history"
+  ,"farmerHistoryEmpty": "Your support history will appear here."
+  ,"farmerRepaymentLabel": "Repayment"
+  ,"repaymentTypeGrain": "Grain"
+  ,"repaymentTypeCash": "Cash"
+  ,"repaymentTypeTransfer": "Transfer"
+  ,"farmerNoteLabel": "Note"
+  ,"switchFarmer": "Switch farmer"
+  ,"switchFarmerTitle": "Switch farmer account?"
+  ,"switchFarmerConfirm": "This signs out this farmer on this device. Your wallet and wallet recovery phrase will not be changed."
+  ,"farmerWalletAction": "My wallet"
+  ,"farmerRefreshAction": "Refresh balance"
+  ,"farmerWelcome": "Welcome, {name}"
+  ,"@farmerWelcome": {"placeholders": {"name": {"type": "String"}}}
+  ,"farmerSupportLabel": "Program support"
+  ,"inviteCameraTitle": "Scan your invite"
+  ,"inviteCameraHint": "Hold the dashboard QR code inside the frame."
+  ,"inviteTestNetworkBody": "SatsFarm is using Mutinynet, a Bitcoin test network. Test coins have no cash value."
+  ,"checkingFarmerSession": "Checking your SatsFarm sign-in…"
+}

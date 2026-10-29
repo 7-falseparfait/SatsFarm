@@ -1,0 +1,54 @@
+name: CI Checks - VSS Integration Tests
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:latest
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          path: ldk-node
+      - name: Checkout VSS
+        uses: actions/checkout@v6
+        with:
+          repository: lightningdevkit/vss-server
+          path: vss-server
+
+      - name: Build and Deploy VSS Server
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 --manifest-path ldk-node/Cargo.toml | jq -r '.packages[] | select(.name == "ldk-node") | .version')
+          cd vss-server
+          # The 0.7 tests use fixed headers without authentication.
+          if [[ "$version" == 0.7.* ]]; then
+            RUSTFLAGS="--cfg noop_authorizer" cargo run --no-default-features server/vss-server-config.toml&
+          else
+            cargo run server/vss-server-config.toml&
+          fi
+      - name: Run VSS Integration tests
+        run: |
+          cd ldk-node
+          export TEST_VSS_BASE_URL="http://localhost:8080/vss"
+          RUSTFLAGS="--cfg vss_test" cargo test io::vss_store
+          RUSTFLAGS="--cfg vss_test" cargo test --test integration_tests_vss

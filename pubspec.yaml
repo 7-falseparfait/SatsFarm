@@ -1,0 +1,47 @@
+name: sats_farm
+description: "Self-custodial Lightning tools for Northern Nigerian farmers."
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  lucide_icons_flutter: ^3.1.25
+
+  # Bitcoin & Lightning SDKs
+  bdk_flutter: ^0.31.3
+  ldk_node: ^0.3.0
+  provider: ^6.1.2
+  intl: ^0.20.2
+  path_provider: ^2.1.5
+  bip39: ^1.0.6
+  bip32: ^2.0.0
+  bech32: ^0.2.2
+  crypto: ^3.0.7
+  pointycastle: ^3.9.1
+  flutter_secure_storage: ^11.2.0
+  mobile_scanner: 7.0.1
+
+dependency_overrides:
+  # Both wallet bindings generated against different freezed_annotation
+  # major versions. This override is verified by the dependency solver only;
+  # native wallet integration still requires upstream compatibility testing.
+  freezed_annotation: ^3.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  generate: true
+  uses-material-design: true

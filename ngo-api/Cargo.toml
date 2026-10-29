@@ -1,0 +1,22 @@
+[package]
+name = "satsfarm-ngo-api"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+tower-http = { version = "0.6", features = ["cors"] }
+uuid = { version = "1", features = ["v4"] }
+ldk-node = "0.7.1"
+
+# Vendored 0.7.1 with BDK_WALLET_SYNC_TIMEOUT_SECS 20s -> 120s so the initial
+# BDK full scan survives Mutinynet Esplora's HTTP 429 backoff (see
+# ../harness/vendor/ldk-node-0.7.1/src/config.rs). It is the same 0.7.1 source
+# as the harness used; only that constant differed.
+[patch.crates-io]
+ldk-node = { path = "../harness/vendor/ldk-node-0.7.1" }
