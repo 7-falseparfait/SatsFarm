@@ -533,6 +533,48 @@ abstract class AppLocalizations {
   /// **'Pay dealer'**
   String get voucherRedeemSubmit;
 
+  /// No description provided for @voucherReviewAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Review payment'**
+  String get voucherReviewAction;
+
+  /// No description provided for @voucherReviewTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Check before you pay'**
+  String get voucherReviewTitle;
+
+  /// No description provided for @voucherReviewDealer.
+  ///
+  /// In en, this message translates to:
+  /// **'Dealer'**
+  String get voucherReviewDealer;
+
+  /// No description provided for @voucherReviewAmount.
+  ///
+  /// In en, this message translates to:
+  /// **'Amount'**
+  String get voucherReviewAmount;
+
+  /// No description provided for @voucherReviewLeft.
+  ///
+  /// In en, this message translates to:
+  /// **'Left on this voucher after'**
+  String get voucherReviewLeft;
+
+  /// No description provided for @historyKindSupport.
+  ///
+  /// In en, this message translates to:
+  /// **'Support'**
+  String get historyKindSupport;
+
+  /// No description provided for @historyKindPayment.
+  ///
+  /// In en, this message translates to:
+  /// **'Payment'**
+  String get historyKindPayment;
+
   /// No description provided for @voucherRateLabel.
   ///
   /// In en, this message translates to:

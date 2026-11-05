@@ -234,6 +234,27 @@ class AppLocalizationsEn extends AppLocalizations {
   String get voucherRedeemSubmit => 'Pay dealer';
 
   @override
+  String get voucherReviewAction => 'Review payment';
+
+  @override
+  String get voucherReviewTitle => 'Check before you pay';
+
+  @override
+  String get voucherReviewDealer => 'Dealer';
+
+  @override
+  String get voucherReviewAmount => 'Amount';
+
+  @override
+  String get voucherReviewLeft => 'Left on this voucher after';
+
+  @override
+  String get historyKindSupport => 'Support';
+
+  @override
+  String get historyKindPayment => 'Payment';
+
+  @override
   String get voucherRateLabel => 'Demo rate: 5 naira per sat. Mutinynet is a test network.';
 
   @override

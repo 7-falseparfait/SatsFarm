@@ -1,5 +1,5 @@
 name: sats_farm
-description: "Self-custodial Lightning tools for Northern Nigerian farmers."
+description: "Traceable farm-support vouchers paid over Lightning, for smallholder farmers in Northern Nigeria."
 publish_to: "none"
 
 version: 1.0.0+1

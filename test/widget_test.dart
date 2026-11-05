@@ -77,6 +77,97 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Seed & fertilizer'), findsOneWidget);
+    // Once on the balance card and once on the voucher.
+    expect(find.text('₦50,000'), findsNWidgets(2));
+  });
+
+  testWidgets('farmer sees the dealer and amount before approving a payment', (
+    WidgetTester tester,
+  ) async {
+    final api = _FarmerApiFake();
+    final provider = VoucherProvider(
+      api: api,
+      storage: _SessionStorageFake(),
+      paymentPollInterval: Duration.zero,
+    );
+    await provider.initializeInviteSession();
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider(create: (_) => LanguageProvider()),
+          ChangeNotifierProvider.value(value: provider),
+        ],
+        child: const MaterialApp(
+          locale: Locale('en'),
+          supportedLocales: [Locale('en'), Locale('ha')],
+          localizationsDelegates: [
+            AppLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: FarmerHomeScreen(onOpenWallet: _noop),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Redeem at dealer'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Redeem at dealer'));
+    await tester.pumpAndSettle();
+    expect(find.text('Pay dealer'), findsNothing);
+
+    await tester.enterText(find.byType(TextField), 'lntbs${'1' * 80}');
+    await tester.tap(find.text('Review payment'));
+    await tester.pumpAndSettle();
+    expect(find.text('Northern Seeds Co.'), findsOneWidget);
+    expect(find.text('₦5,000'), findsOneWidget);
+    expect(api.requested, isEmpty, reason: 'reviewing must not pay');
+
+    await tester.tap(find.text('Pay dealer'));
+    await tester.pumpAndSettle();
+    expect(api.requested, ['/api/payments/request']);
+    expect(api.tokens, everyElement('test-session'));
+    expect(find.text('Dealer paid on Mutinynet'), findsOneWidget);
+    expect(find.text('Pay dealer'), findsNothing);
+  });
+
+  group('payment outcome', () {
+    Future<VoucherProvider> signedIn(_FarmerApiFake api) async {
+      final provider = VoucherProvider(
+        api: api,
+        storage: _SessionStorageFake(),
+        paymentPollInterval: Duration.zero,
+      );
+      await provider.initializeInviteSession();
+      return provider;
+    }
+
+    test('a missed status check does not report a failed payment', () async {
+      final api = _FarmerApiFake()..statusChecksToDrop = 2;
+      final provider = await signedIn(api);
+      final payment = await provider.redeem(voucherId: 'SF-2081', invoice: 'x');
+      expect(payment.state, PaymentState.settled);
+    });
+
+    test('no answer to the request is pending, not failed', () async {
+      final api = _FarmerApiFake()..requestError = NgoApiException(0);
+      final provider = await signedIn(api);
+      final payment = await provider.redeem(voucherId: 'SF-2081', invoice: 'x');
+      expect(payment.state, PaymentState.pending);
+      expect(provider.error, isNull);
+    });
+
+    test('a refusal from the API is a failure with its reason', () async {
+      final api = _FarmerApiFake()
+        ..requestError = NgoApiException(400, message: 'Not whitelisted');
+      final provider = await signedIn(api);
+      final payment = await provider.redeem(voucherId: 'SF-2081', invoice: 'x');
+      expect(payment.state, PaymentState.failed);
+      expect(provider.error, 'Not whitelisted');
+    });
   });
 
   testWidgets('full voucher list scrolls without overflowing', (
@@ -135,18 +226,59 @@ void _noop() {}
 class _SessionStorageFake extends SecureStorageService {
   @override
   Future<String?> readFarmerSessionToken() async => 'test-session';
+
+  @override
+  Future<void> deleteFarmerSessionToken() async {}
 }
 
 class _FarmerApiFake extends NgoApiService {
   _FarmerApiFake({this.voucherCount = 1});
 
   final int voucherCount;
+  final List<String> requested = <String>[];
+  final List<String?> tokens = <String?>[];
+  NgoApiException? requestError;
+  int statusChecksToDrop = 0;
+
+  @override
+  Future<Map<String, dynamic>> postJson(
+    String path,
+    Map<String, dynamic> payload, {
+    String? bearerToken,
+  }) async {
+    tokens.add(bearerToken);
+    if (path == '/api/payments/preview') {
+      return {
+        'dealer': 'Northern Seeds Co.',
+        'amountNgn': 5000,
+        'amountSats': 1000,
+        'availableAfterNgn': 45000,
+      };
+    }
+    requested.add(path);
+    if (requestError != null) throw requestError!;
+    return {
+      'payment': {'id': 'SF-PAY', 'state': 'Pending'},
+    };
+  }
 
   @override
   Future<Map<String, dynamic>> getJson(
     String path, {
     String? bearerToken,
   }) async {
+    if (path == '/api/payments/SF-PAY') {
+      if (statusChecksToDrop > 0) {
+        statusChecksToDrop -= 1;
+        throw NgoApiException(0);
+      }
+      return {
+        'id': 'SF-PAY',
+        'state': 'Settled',
+        'amountNgn': 5000,
+        'amountSats': 1000,
+      };
+    }
     if (path == '/api/farmer/account') {
       return {
         'farmerId': 'F-1042',

@@ -1,7 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.CAMERA" />
     <application
-        android:label="sats_farm"
+        android:label="SatsFarm"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

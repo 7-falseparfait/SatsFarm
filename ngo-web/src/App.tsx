@@ -74,7 +74,6 @@ type LnStatus = {
   dealer?: { nodeId: string }
 }
 
-type PaymentRequest = { idempotent: boolean; payment: Payment }
 type FunderReceiveAddress = { address: string; network: string }
 type RepaymentType = 'Grain' | 'Cash' | 'Transfer'
 type DealerSale = { id: string; dealer: string; amountNgn: number; status: string; createdAt: string }
@@ -150,7 +149,6 @@ function App() {
   const [query, setQuery] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [farmerModalOpen, setFarmerModalOpen] = useState(false)
-  const [payModalOpen, setPayModalOpen] = useState(false)
   const [repaymentVoucher, setRepaymentVoucher] = useState<Voucher | null>(null)
   const [notice, setNotice] = useState('')
   const [apiError, setApiError] = useState('')
@@ -158,6 +156,7 @@ function App() {
   const [lnStatus, setLnStatus] = useState<LnStatus | null>(null)
   const [funderAddress, setFunderAddress] = useState('')
   const [addressBusy, setAddressBusy] = useState(false)
+  const [channelBusy, setChannelBusy] = useState(false)
 
   async function refreshData() {
     try {
@@ -243,33 +242,6 @@ function App() {
     window.setTimeout(() => setNotice(''), 4200)
   }
 
-  async function requestVoucherPayment(voucherId: string, invoice: string) {
-    try {
-      const initial = await api<PaymentRequest>('/api/payments/request', {
-        method: 'POST', body: JSON.stringify({ voucherId, invoice, idempotencyKey: crypto.randomUUID() }),
-      })
-      let payment = initial.payment
-      let attempts = 0
-      while (payment.state === 'Pending' && attempts < 12) {
-        await new Promise((resolve) => window.setTimeout(resolve, 2500))
-        payment = await api<Payment>(`/api/payments/${payment.id}`)
-        attempts += 1
-      }
-      await refreshData()
-      setPayModalOpen(false)
-      if (payment.state === 'Settled') {
-        setNotice(`Payment ${payment.id} settled on Mutinynet (test network): ${payment.amountSats.toLocaleString()} sats = ${naira(payment.amountNgn)} at the fixed demo rate.`)
-      } else if (payment.state === 'Failed') {
-        setApiError(`Payment ${payment.id} failed: ${payment.errorReason ?? 'node reported a failure'}`)
-      } else {
-        setNotice(`Payment ${payment.id} still pending on Mutinynet - check its state on the payments ledger.`)
-      }
-    } catch (error) {
-      setApiError(error instanceof Error ? error.message : 'Could not request the payment.')
-    }
-    window.setTimeout(() => setNotice(''), 6000)
-  }
-
   async function recordRepayment(voucherId: string, amountNgn: number, repaymentType: RepaymentType, note: string, requestId: string) {
     try {
       await api(`/api/vouchers/${encodeURIComponent(voucherId)}/repayments`, {
@@ -308,6 +280,23 @@ function App() {
       setApiError(error instanceof Error ? error.message : 'Could not generate the funder receive address.')
     } finally {
       setAddressBusy(false)
+    }
+  }
+
+  async function openDealerChannel() {
+    setChannelBusy(true)
+    setApiError('')
+    try {
+      const result = await api<{ opened: boolean; channelSats: number }>('/api/funder/open-dealer-channel', { method: 'POST' })
+      setNotice(result.opened
+        ? `Opening a ${result.channelSats.toLocaleString()}-sat channel to the dealer. It can pay once it confirms on Mutinynet.`
+        : 'The dealer channel already exists.')
+      window.setTimeout(() => setNotice(''), 5000)
+      await refreshData()
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : 'Could not open the dealer channel.')
+    } finally {
+      setChannelBusy(false)
     }
   }
 
@@ -429,9 +418,9 @@ function App() {
             <div className="heading-actions">{screen === 'farmers' && <button className="button button-secondary" onClick={() => setFarmerModalOpen(true)}><Icon name="plus" size={16} /> Add farmer</button>}<button className="button button-secondary" onClick={() => setScreen('payments')}><Icon name="download" size={16} /> Export report</button><button className="button button-primary" onClick={() => setModalOpen(true)}><Icon name="plus" size={17} /> Create voucher</button></div>
           </section>
 
-          {screen === 'overview' && <Overview vouchers={vouchers} payments={filteredPayments} farmers={farmers} dealers={dealers} farmerById={farmerById} totalIssued={totalIssued} totalGranted={totalGranted} grantOutstanding={grantOutstanding} loanOutstanding={loanOutstanding} lnStatus={lnStatus} funderAddress={funderAddress} addressBusy={addressBusy} generateFunderAddress={generateFunderAddress} copyFunderAddress={copyFunderAddress} openVouchers={() => setScreen('vouchers')} openPayments={() => setScreen('payments')} create={() => setModalOpen(true)} />}
+          {screen === 'overview' && <Overview vouchers={vouchers} payments={filteredPayments} farmers={farmers} dealers={dealers} farmerById={farmerById} totalIssued={totalIssued} totalGranted={totalGranted} grantOutstanding={grantOutstanding} loanOutstanding={loanOutstanding} lnStatus={lnStatus} funderAddress={funderAddress} addressBusy={addressBusy} generateFunderAddress={generateFunderAddress} copyFunderAddress={copyFunderAddress} channelBusy={channelBusy} openDealerChannel={openDealerChannel} openVouchers={() => setScreen('vouchers')} openPayments={() => setScreen('payments')} create={() => setModalOpen(true)} />}
           {screen === 'vouchers' && <VoucherView vouchers={filteredVouchers} farmerById={farmerById} query={query} setQuery={setQuery} create={() => setModalOpen(true)} recordRepayment={(voucher) => { setApiError(''); setRepaymentVoucher(voucher) }} />}
-          {screen === 'payments' && <PaymentView payments={filteredPayments} farmerById={farmerById} query={query} setQuery={setQuery} create={() => setPayModalOpen(true)} lnStatus={lnStatus} />}
+          {screen === 'payments' && <PaymentView payments={filteredPayments} farmerById={farmerById} query={query} setQuery={setQuery} lnStatus={lnStatus} />}
           {screen === 'farmers' && <FarmerView farmers={farmers} onRegenerate={regenerateInvite} />}
           {screen === 'dealers' && <DealerView dealers={dealers} dealerSales={dealerSales} dealerLinks={dealerLinks} demoDealerLinks={demoDealerLinks} lnStatus={lnStatus} onWhitelist={whitelistDealer} onRegenerateKey={regenerateDealerKey} onRegenerateDemoKey={regenerateDemoDealerKey} />}
 
@@ -441,7 +430,6 @@ function App() {
 
       {modalOpen && <VoucherModal farmers={farmers} onClose={() => setModalOpen(false)} onCreate={createVoucher} />}
       {farmerModalOpen && <FarmerModal onClose={() => setFarmerModalOpen(false)} onCreate={createFarmer} />}
-      {payModalOpen && <PayModal vouchers={vouchers} lnStatus={lnStatus} onClose={() => setPayModalOpen(false)} onSubmit={requestVoucherPayment} />}
       {repaymentVoucher && <RepaymentModal voucher={repaymentVoucher} error={apiError} onClose={() => setRepaymentVoucher(null)} onSubmit={recordRepayment} />}
       {notice && <div className="toast" role="status"><Icon name="check" size={17} />{notice}</div>}
     </div>
@@ -457,9 +445,10 @@ function sats(amountNgn: number, rateNgnPerSat: number | null | undefined) {
   return `${Math.floor(amountNgn / rateNgnPerSat).toLocaleString()} sats`
 }
 
-function Overview({ vouchers, payments, farmers, dealers, farmerById, totalIssued, totalGranted, grantOutstanding, loanOutstanding, lnStatus, funderAddress, addressBusy, generateFunderAddress, copyFunderAddress, openVouchers, openPayments, create }: {
-  vouchers: Voucher[]; payments: Payment[]; farmers: Farmer[]; dealers: Dealer[]; farmerById: Map<string, Farmer>; totalIssued: number; totalGranted: number; grantOutstanding: number; loanOutstanding: number; lnStatus: LnStatus | null; funderAddress: string; addressBusy: boolean; generateFunderAddress: () => void; copyFunderAddress: () => void; openVouchers: () => void; openPayments: () => void; create: () => void
+function Overview({ vouchers, payments, farmers, dealers, farmerById, totalIssued, totalGranted, grantOutstanding, loanOutstanding, lnStatus, funderAddress, addressBusy, generateFunderAddress, copyFunderAddress, channelBusy, openDealerChannel, openVouchers, openPayments, create }: {
+  vouchers: Voucher[]; payments: Payment[]; farmers: Farmer[]; dealers: Dealer[]; farmerById: Map<string, Farmer>; totalIssued: number; totalGranted: number; grantOutstanding: number; loanOutstanding: number; lnStatus: LnStatus | null; funderAddress: string; addressBusy: boolean; generateFunderAddress: () => void; copyFunderAddress: () => void; channelBusy: boolean; openDealerChannel: () => void; openVouchers: () => void; openPayments: () => void; create: () => void
 }) {
+  const dealerChannel = lnStatus?.funder?.channels.find((channel) => channel.counterpartyNodeId === lnStatus.dealer?.nodeId)
   const spendableLightningSats = lnStatus?.funder?.channels
     .filter((channel) => channel.isUsable)
     .reduce((sum, channel) => sum + channel.outboundCapacitySats, 0) ?? 0
@@ -478,9 +467,14 @@ function Overview({ vouchers, payments, farmers, dealers, farmerById, totalIssue
     <section className="panel full-panel funder-funding-panel">
       <div className="list-toolbar">
         <div><h2>Fund the program node</h2><p>Receive address for the API funder node · Mutinynet test network only</p></div>
-        <button className="button button-primary" onClick={generateFunderAddress} disabled={addressBusy || !lnStatus?.ready}>
-          <Icon name="plus" size={16} /> {addressBusy ? 'Generating…' : funderAddress ? 'Generate new address' : 'Get receive address'}
-        </button>
+        <div className="toolbar-actions">
+          <button className="button button-primary" onClick={generateFunderAddress} disabled={addressBusy || !lnStatus?.ready}>
+            <Icon name="plus" size={16} /> {addressBusy ? 'Generating…' : funderAddress ? 'Generate new address' : 'Get receive address'}
+          </button>
+          <button className="button button-secondary" onClick={openDealerChannel} disabled={channelBusy || !lnStatus?.ready || dealerChannel !== undefined}>
+            {channelBusy ? 'Opening…' : !dealerChannel ? 'Open dealer channel' : dealerChannel.isUsable ? 'Dealer channel open' : 'Channel confirming…'}
+          </button>
+        </div>
       </div>
       <div className="funder-funding-content">
         {funderAddress
@@ -491,7 +485,7 @@ function Overview({ vouchers, payments, farmers, dealers, farmerById, totalIssue
             </div></>
           : <p>{lnStatus?.ready ? 'Generate an address to request additional Mutinynet test funds for the program node.' : 'The funder node must finish starting before it can generate a receive address.'}</p>}
       </div>
-      <div className="panel-bottom"><span>On-chain funds do not automatically add Lightning channel capacity.</span><span className="subtle-text">Mutinynet only · no mainnet funds</span></div>
+      <div className="panel-bottom"><span>{`On-chain funds become payment capacity once you open the dealer channel, which needs about 70,000 confirmed sats. Spendable now: ${(lnStatus?.funder?.spendableOnchainSats ?? 0).toLocaleString()} sats.`}</span><span className="subtle-text">Mutinynet only · no mainnet funds</span></div>
     </section>
 
     <section className="content-grid">
@@ -560,12 +554,12 @@ function RepaymentModal({ voucher, error, onClose, onSubmit }: {
   </form></section></div>
 }
 
-function PaymentView({ payments, farmerById, query, setQuery, create, lnStatus }: {
-  payments: Payment[]; farmerById: Map<string, Farmer>; query: string; setQuery: (value: string) => void; create: () => void; lnStatus: LnStatus | null
+function PaymentView({ payments, farmerById, query, setQuery, lnStatus }: {
+  payments: Payment[]; farmerById: Map<string, Farmer>; query: string; setQuery: (value: string) => void; lnStatus: LnStatus | null
 }) {
   const seeded = (payment: Payment) => !payment.paymentHash
   return <section className="panel full-panel">
-    <div className="list-toolbar"><div><h2>Payment activity</h2><p>SEED rows are storied examples. Voucher rows are paid on the Mutinynet test network at the fixed demo rate; settled rows carry a strokeable payment hash and preimage.</p></div><div className="toolbar-actions"><SearchBox value={query} onChange={setQuery} placeholder="Search payment, farmer, dealer" /><button className="button button-primary" onClick={create} disabled={!lnStatus?.ready}><Icon name="plus" size={16} /> Request payment</button></div></div>
+    <div className="list-toolbar"><div><h2>Payment activity</h2><p>Farmers approve each payment in their app. SEED rows are examples; voucher rows are paid on the Mutinynet test network at the fixed demo rate, and settled rows carry a payment hash and preimage.</p></div><div className="toolbar-actions"><SearchBox value={query} onChange={setQuery} placeholder="Search payment, farmer, dealer" /></div></div>
     <div className="table-scroll"><table><thead><tr><th>PAYMENT</th><th>FARMER</th><th>DEALER</th><th>NAIRA VALUE</th><th>SATS</th><th>TIME</th><th>STATE</th></tr></thead><tbody>
       {payments.map((payment) => <tr key={payment.id} title={payment.paymentHash ? `Hash ${payment.paymentHash}\nPreimage ${payment.preimage ?? '—'}\n${payment.rateLabel ?? ''}` : undefined}>
         <td><strong className="mono">{payment.id}</strong><small>{seeded(payment) ? 'seed example' : `Mutinynet · ${payment.rateUsed ?? ''} NGN/sat`}</small></td>
@@ -577,7 +571,7 @@ function PaymentView({ payments, farmerById, query, setQuery, create, lnStatus }
         <td><StatusPill status={payment.state} /></td>
       </tr>)}
     </tbody></table>{payments.length === 0 && <EmptyState message="No sample payments match that search." />}</div>
-    <div className="panel-bottom"><span>{lnStatus?.rateLabel ?? 'Payment rate unavailable until the Lightning node is ready.'}</span><span className="subtle-text">{lnStatus?.ready ? 'Payments from the funder node · Mutinynet' : 'Payment actions disabled: node not ready'}</span></div>
+    <div className="panel-bottom"><span>{lnStatus?.rateLabel ?? 'Payment rate unavailable until the Lightning node is ready.'}</span><span className="subtle-text">{lnStatus?.ready ? 'Payments from the funder node · Mutinynet' : 'Payments unavailable: node not ready'}</span></div>
   </section>
 }
 
@@ -705,25 +699,6 @@ function VoucherModal({ farmers, onClose, onCreate }: { farmers: Farmer[]; onClo
     <label className="field-label">Voucher value <span className="field-hint">NGN</span><div className="amount-input"><span>₦</span><input inputMode="numeric" type="number" min="1" step="1" placeholder="50,000" value={amount} onChange={(event) => setAmount(event.target.value)} required /></div></label>
     {amountValue > 0 && <div className="allocation-preview"><span>{kind} voucher value</span><strong>{naira(amountValue)}</strong><small>{kind === 'Grant' ? 'Redeemed value is written off — the farmer owes nothing.' : 'Redeemed value is expected to be repaid by the farmer.'}</small></div>}
     <div className="modal-actions"><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary" disabled={!canCreate}><Icon name="plus" size={16} /> Create {kind.toLowerCase()} voucher</button></div>
-  </form></section></div>
-}
-
-function PayModal({ vouchers, lnStatus, onClose, onSubmit }: {
-  vouchers: Voucher[]; lnStatus: LnStatus | null; onClose: () => void; onSubmit: (voucherId: string, invoice: string) => void
-}) {
-  const activeVouchers = vouchers.filter((voucher) => voucher.status === 'Active' && voucher.remainingNgn > 0)
-  const [voucherId, setVoucherId] = useState(activeVouchers[0]?.id ?? '')
-  const [invoice, setInvoice] = useState('')
-  const invoiceValue = invoice.trim()
-  const rate = lnStatus?.ready ? lnStatus.rateNgnPerSat : null
-  const canSubmit = voucherId !== '' && invoiceValue.length > 80 && rate !== null
-
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="pay-modal-title"><div className="modal-header"><div><span className="eyebrow">MUTINYNET TEST NETWORK</span><h2 id="pay-modal-title">Request dealer payment</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><Icon name="close" size={19} /></button></div>
-  <p className="modal-copy">{lnStatus?.ready ? `Paste the BOLT11 invoice from the vendor page. Payment is sent from the funder node on ${lnStatus.network}.` : 'Waiting for the Lightning node to finish bootstrapping.'}</p>
-  <form onSubmit={(event) => { event.preventDefault(); if (canSubmit && rate !== null) onSubmit(voucherId, invoiceValue) }}>
-    <label className="field-label">Voucher<select value={voucherId} onChange={(event) => setVoucherId(event.target.value)}>{activeVouchers.map((item) => <option key={item.id} value={item.id}>{item.id} · {item.purpose} · {naira(item.remainingNgn)} left</option>)}</select></label>
-    <label className="field-label">Dealer BOLT11 invoice<textarea className="invoice-box" rows={4} value={invoice} onChange={(event) => setInvoice(event.target.value)} placeholder="lntbs…" spellCheck={false} /></label>
-    <div className="modal-actions"><button type="button" className="button button-secondary" onClick={onClose}>Cancel</button><button type="submit" className="button button-primary" disabled={!canSubmit}><Icon name="arrow" size={16} /> Pay from funder node</button></div>
   </form></section></div>
 }
 

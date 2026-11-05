@@ -7,7 +7,9 @@ import 'package:provider/provider.dart';
 import '../../core/theme/app_theme.dart';
 import '../../l10n/app_localizations.dart';
 import '../../providers/voucher_provider.dart';
+import '../../services/ngo_api_service.dart';
 import '../../widgets/language_toggle_button.dart';
+import 'vouchers_screen.dart';
 
 class FarmerJoinScreen extends StatefulWidget {
   const FarmerJoinScreen({super.key});
@@ -405,46 +407,56 @@ class FarmerHomeScreen extends StatelessWidget {
                       'closed' => strings.voucherStatusClosed,
                       _ => strings.voucherStatusActive,
                     };
+                    final canPay =
+                        voucher.status == VoucherStatus.active &&
+                        voucher.remainingNgn > 0;
+                    final details = ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: const Color(0xFFEAF0E4),
+                        child: Icon(LucideIcons.ticket, color: AppTheme.forest),
+                      ),
+                      title: Text(
+                        voucher.purpose,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      subtitle: Text(
+                        '${voucher.id} · ${isGrant ? strings.voucherKindGrant : strings.voucherKindLoan} · $status\n${strings.voucherIssuedAmount(_naira(voucher.amount))}${isGrant ? '' : '\n${strings.voucherAmountOwed(_naira(voucher.amountOwedNgn))}'}',
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: Text(
+                        _naira(voucher.remainingNgn),
+                        style: const TextStyle(
+                          color: AppTheme.forest,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    );
                     return Card(
                       margin: const EdgeInsets.only(bottom: 9),
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: const Color(0xFFEAF0E4),
-                          child: Icon(
-                            LucideIcons.ticket,
-                            color: AppTheme.forest,
-                          ),
-                        ),
-                        title: Text(
-                          voucher.purpose,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        subtitle: Text(
-                          '${voucher.id} · ${isGrant ? strings.voucherKindGrant : strings.voucherKindLoan} · $status\n${strings.voucherIssuedAmount(_naira(voucher.amount))}${isGrant ? '' : '\n${strings.voucherAmountOwed(_naira(voucher.amountOwedNgn))}'}',
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        trailing: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              _naira(voucher.remainingNgn),
-                              style: const TextStyle(
-                                color: AppTheme.forest,
-                                fontWeight: FontWeight.w800,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          details,
+                          if (canPay)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                              child: FilledButton.icon(
+                                onPressed: () => showModalBottomSheet<void>(
+                                  context: context,
+                                  isScrollControlled: true,
+                                  shape: const RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.vertical(
+                                      top: Radius.circular(26),
+                                    ),
+                                  ),
+                                  builder: (_) => RedeemSheet(voucher: voucher),
+                                ),
+                                icon: const Icon(LucideIcons.store, size: 17),
+                                label: Text(strings.voucherRedeem),
                               ),
                             ),
-                            Text(
-                              _naira(voucher.remainingNgn),
-                              style: const TextStyle(
-                                color: AppTheme.mutedInk,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
-                        ),
+                        ],
                       ),
                     );
                   }),
@@ -494,7 +506,7 @@ class FarmerHomeScreen extends StatelessWidget {
                         subtitle: Text(
                           entry.kind == 'Repayment'
                               ? '${_repaymentTypeLabel(entry.repaymentType, strings)} · ${entry.time}${entry.note == null ? '' : '\n${strings.farmerNoteLabel}: ${entry.note}'}'
-                              : '${entry.kind} · ${entry.time}',
+                              : '${entry.kind == 'Payment' ? strings.historyKindPayment : strings.historyKindSupport} · ${entry.time}',
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
                         ),

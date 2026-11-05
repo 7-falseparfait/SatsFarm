@@ -30,9 +30,11 @@ computer or a trusted private network.
   an optional note. Repayments update the balance and appear in the farmer's
   history. Grants cannot be repaid, and repayments larger than the amount owed
   are rejected.
-- Create a dealer invoice and approve its payment from the farmer app. The API
-  checks the voucher balance and registered dealer before paying.
-- Generate a Mutinynet on-chain receive address for the API funder node.
+- Create a dealer invoice, then review its dealer and naira amount and approve
+  it in the farmer app. Only the signed-in farmer who owns the voucher can
+  approve. The API also checks the available balance and registered dealer.
+- Fund the API's funder node from the dashboard and open its channel to the
+  dealer node.
 
 The demo exchange rate is fixed at **₦5 per sat**. USSD access, offline use,
 independent verification of produce delivery, and production authentication
@@ -84,6 +86,10 @@ curl http://127.0.0.1:8787/api/ln/status
 The Lightning nodes can take time to sync; the status endpoint reports when
 they are ready. Keep the API running while using the dashboard or farmer app.
 
+Node storage is not in the repository, so a fresh checkout starts with new,
+unfunded nodes and **cannot pay anyone yet**. See
+[Fund the demo once](#fund-the-demo-once) after starting the dashboard.
+
 ### 2. Start the Program Desk
 
 In another terminal:
@@ -98,6 +104,24 @@ Open the local address printed by Vite (normally
 `http://localhost:5173`). The dealer page is at `/dealer`; the dashboard also
 links to the demo dealer pages.
 
+### Fund the demo once
+
+If you have a backup of `ngo-api/data/`, restore it instead (with the API
+stopped). Otherwise, on the dashboard's Overview page:
+
+1. Under **Fund the program node**, choose **Get receive address**.
+2. Send about 70,000 Mutinynet sats to it from the
+   [faucet](https://faucet.mutinynet.com/). This covers the 40,000-sat channel,
+   a 25,000-sat reserve, and fees.
+3. When the spendable amount on that panel has updated, choose
+   **Open dealer channel**.
+4. Wait until the button says **Dealer channel open**. Mutinynet blocks are
+   quick, but this can take a few minutes.
+
+The channel pays one way, so it covers about ₦200,000 in total at the demo rate.
+Use small amounts such as ₦5,000 when rehearsing. Check capacity at any time
+with `GET /api/ln/status`.
+
 ### 3. Run the farmer app
 
 From the repository root, install Flutter packages:
@@ -107,16 +131,9 @@ flutter pub get
 flutter devices
 ```
 
-For an Android emulator or a phone that can reach the computer's API at
-`127.0.0.1:8787`:
-
-```sh
-flutter run -d <android-device> \
-  --dart-define=SATS_FARM_API_URL=http://127.0.0.1:8787
-```
-
-For a physical phone connected by USB, you can forward the API port with ADB
-(replace `<device-id>` with the ID shown by `adb devices`):
+For an Android emulator or a phone connected by USB, forward the API port with
+ADB so the device's `127.0.0.1` reaches your computer (replace `<device-id>`
+with the ID shown by `adb devices`):
 
 ```sh
 adb -s <device-id> reverse tcp:8787 tcp:8787
@@ -158,13 +175,16 @@ API or dashboard to the public internet.
 3. Create a demo farmer and show the invite QR/code.
 4. Open the farmer app, redeem the invite, and view the farmer's vouchers.
 5. In the dealer page, create an invoice for a sale.
-6. In the farmer app, scan the invoice and approve payment using an active
-   voucher. The dashboard and app can then show the payment state.
+6. In the farmer app, choose **Redeem at dealer** on an active voucher, scan the
+   invoice, check the dealer and amount, and choose **Pay dealer**. The app and
+   dashboard then show the payment state. An invoice can only be used once, so
+   create a new one for each attempt.
 7. Create a loan voucher if needed, record a repayment from the dashboard, and
    refresh the farmer's loan history to show the updated amount owed.
 
-Dashboard **Reset demo data** restores the seeded demo ledger records. It does
-not mean you should delete the API's Lightning node data: node storage can
+Dashboard **Reset demo data** restores the seeded demo ledger records and ends
+farmer sessions, so the app returns to the join screen on its next refresh. It
+does not mean you should delete the API's Lightning node data: node storage can
 contain wallet and channel state.
 
 ## Configuration and local data
@@ -190,8 +210,8 @@ their contents, recovery material, or credentials.
   mainnet Bitcoin to an address from this demo.
 - [Mutinynet explorer](https://mutinynet.com/), [faucet](https://faucet.mutinynet.com/),
   and [Lightning gossip snapshot](https://rgs.mutinynet.com/snapshot/0).
-- On-chain funds sent to the funder node do not automatically become Lightning
-  channel capacity.
+- On-chain funds sent to the funder node become Lightning capacity only after
+  you open the dealer channel.
 - The naira-to-sats conversion is a fixed demo rate, not a live exchange rate.
 - The API dashboard/admin routes have no authentication and CORS is permissive.
   Keep the service on localhost or a trusted development network.

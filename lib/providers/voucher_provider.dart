@@ -10,12 +10,16 @@ import '../services/secure_storage_service.dart';
 /// Program-side state for the farmer: device identity bound to an NGO
 /// profile, the vouchers the NGO sent, and dealer redemptions.
 class VoucherProvider extends ChangeNotifier {
-  VoucherProvider({NgoApiService? api, SecureStorageService? storage})
-    : _api = api ?? NgoApiService(),
-      _storage = storage ?? SecureStorageService();
+  VoucherProvider({
+    NgoApiService? api,
+    SecureStorageService? storage,
+    this._paymentPollInterval = const Duration(seconds: 4),
+  }) : _api = api ?? NgoApiService(),
+       _storage = storage ?? SecureStorageService();
 
   final NgoApiService _api;
   final SecureStorageService _storage;
+  final Duration _paymentPollInterval;
 
   FarmerProfile? _profile;
   FarmerAccount? _farmerAccount;
@@ -121,8 +125,13 @@ class VoucherProvider extends ChangeNotifier {
     notifyListeners();
     try {
       await _loadFarmerAccount();
-    } on NgoApiException {
-      _joinError = 'unavailable';
+    } on NgoApiException catch (error) {
+      if (error.status == 401) {
+        // The session is gone, e.g. after Reset demo data: sign in again.
+        await logoutFarmer();
+      } else {
+        _joinError = 'unavailable';
+      }
     } finally {
       _busy = false;
       notifyListeners();
@@ -232,8 +241,25 @@ class VoucherProvider extends ChangeNotifier {
     }
   }
 
+  /// Runs every payment check without paying, so the farmer can see the dealer
+  /// and amount before approving. Throws [NgoApiException] when it is refused.
+  Future<PaymentPreview> previewPayment({
+    required String voucherId,
+    required String invoice,
+  }) async {
+    final map = await _api.postJson('/api/payments/preview', {
+      'voucherId': voucherId,
+      'invoice': invoice.trim(),
+    }, bearerToken: _sessionToken);
+    return PaymentPreview.fromMap(map);
+  }
+
   /// Asks the NGO to pay a whitelisted dealer's invoice from this voucher, and
   /// waits for the payment to settle (or fail) on the Mutinynet test network.
+  ///
+  /// A network problem never reports failure, because the payment may still
+  /// have gone through. It reports pending instead, and approving the same
+  /// invoice again is safe: the API returns the existing payment.
   Future<PaymentRecord> redeem({
     required String voucherId,
     required String invoice,
@@ -241,32 +267,49 @@ class VoucherProvider extends ChangeNotifier {
     _busy = true;
     _error = null;
     notifyListeners();
-    PaymentRecord result;
     try {
-      final map = await _api.postJson('/api/payments/request', {
-        'voucherId': voucherId,
-        'invoice': invoice.trim(),
-      });
-      result = _paymentFromResponse(map);
+      PaymentRecord result;
+      try {
+        final map = await _api.postJson('/api/payments/request', {
+          'voucherId': voucherId,
+          'invoice': invoice.trim(),
+        }, bearerToken: _sessionToken);
+        result = _paymentFromResponse(map);
+      } on NgoApiException catch (e) {
+        final unknownOutcome = e.status == 0;
+        if (!unknownOutcome) {
+          _error = e.message ?? 'Redeem request failed. Try again.';
+        }
+        return PaymentRecord(
+          id: '',
+          state: unknownOutcome ? PaymentState.pending : PaymentState.failed,
+          amountNgn: 0,
+          amountSats: 0,
+          dealer: '',
+          time: '',
+        );
+      }
       var attempts = 0;
       while (result.state == PaymentState.pending && attempts < 12) {
-        await Future<void>.delayed(const Duration(seconds: 4));
-        final fetched = await _api.getJson('/api/payments/${result.id}');
-        result = PaymentRecord.fromMap(fetched);
+        await Future<void>.delayed(_paymentPollInterval);
         attempts += 1;
+        try {
+          final fetched = await _api.getJson('/api/payments/${result.id}');
+          result = PaymentRecord.fromMap(fetched);
+        } on NgoApiException {
+          // A missed status check says nothing about the payment. Keep checking.
+        }
       }
-      await _refreshInner();
+      try {
+        if (_sessionToken != null) {
+          await _loadFarmerAccount();
+        } else {
+          await _refreshInner();
+        }
+      } on NgoApiException {
+        // The payment result stands; the balance updates on the next refresh.
+      }
       return result;
-    } on NgoApiException catch (e) {
-      _error = e.message ?? 'Redeem request failed. Try again.';
-      return PaymentRecord(
-        id: '',
-        state: PaymentState.failed,
-        amountNgn: 0,
-        amountSats: 0,
-        dealer: '',
-        time: '',
-      );
     } finally {
       _busy = false;
       notifyListeners();

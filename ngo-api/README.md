@@ -66,6 +66,9 @@ funds or farmer location/GPS data are used.
   "network": "MUTINYNET (custom signet) TEST NETWORK ONLY" }`. Use Mutinynet
   test funds only. On-chain funds do not automatically add Lightning channel
   capacity.
+- `POST /api/funder/open-dealer-channel` — opens the 40,000-sat funder → dealer
+  channel; needs about 70,000 confirmed on-chain sats. Returns
+  `{ "opened": false }` without doing anything if the channel already exists.
 - `GET /api/farmers`
 - `POST /api/dashboard/farmers` `{ "name": "...", "phoneNumber": "...", "supportAmount": 50000 }`
   — creates a farmer and initial support balance, and returns the invite code
@@ -80,8 +83,6 @@ funds or farmer location/GPS data are used.
 - `POST /api/farmers` and `GET /api/farmers/by-device/{device_id}` — legacy
   device-profile compatibility endpoints; the invite-based app does not use
   them.
-- `GET /api/farmers/by-device/{device_id}` — what the Flutter app calls at
-  startup (404 = not registered yet)
 - `GET /api/farmers/{id}/vouchers` — the farmer's voucher list (used by the app)
 - `GET /api/vouchers` / `POST /api/vouchers` `{ "farmerId": "F-1042", "purpose": "Maize seed", "amount": 50000, "kind": "Grant" }`
   — `kind` is `"Grant"` (default, never repayable) or `"Loan"` (counts as owed
@@ -93,13 +94,25 @@ funds or farmer location/GPS data are used.
   returns a conflict. Loan debt is the issued amount less recorded repayments,
   separate from the voucher's remaining dealer-spend balance.
 - `GET /api/payments` / `GET /api/payments/{id}` (poll while `state = "Pending"`)
+- `POST /api/payments/preview` `{ "voucherId": "...", "invoice": "lntbs…" }` with
+  `Authorization: Bearer <session-token>` — runs the payment checks without
+  paying and returns `dealer`, `amountNgn`, `amountSats`, and `availableAfterNgn`
+  for the farmer to review.
 - `POST /api/payments/request` `{ "voucherId": "...", "invoice": "lntbs…", "idempotencyKey": "optional" }`
-  - Parses the BOLT11 invoice, refuses zero-amount or msat-remainder invoices
+  with `Authorization: Bearer <session-token>`
+  - Refuses a missing session (401) or a voucher owned by another farmer (403)
+  - Parses the BOLT11 invoice, refuses expired, zero-amount, or msat-remainder invoices
   - Refuses payee node IDs that are not whitelisted (_dealers with `whitelisted = 1`_)
-  - Refuses invoices whose sats × 5 NGN exceed the voucher's `remainingNgn`
+  - Refuses inactive vouchers, and invoices whose sats × 5 NGN exceed the voucher's
+    `remainingNgn` less its pending payments
   - Idempotent on the invoice payment hash or the client `idempotencyKey`
   - Inserted rows start `Pending`; settlement by the funder node flips the row
-    to `Settled` (with preimage) and debits the voucher by sats × rate
+    to `Settled` (with preimage) and debits the voucher by sats × rate exactly
+    once, including when reconciling after a restart
+- `GET /api/ln/payment/{paymentHash}` — public settlement proof: dealer, amounts,
+  preimage, and whether the preimage hashes to the payment hash
+- `GET /api/dealers/invoices/history` — with `X-Dealer-Key`, the dealer's recent
+  invoices and settlement proofs
 - `GET /api/dealers/demo` — provisions the two named demo dealers on the shared
   dealer node and returns their current page keys for the vendor picker
 - `GET /api/dealers/invoices` — admin view of vendor invoice amounts and statuses
@@ -120,19 +133,17 @@ SQLite file, `SATSFARM_LN_FUNDER_DIR` / `SATSFARM_LN_DEALER_DIR` for node
 storage. For a phone on the same Wi-Fi, bind to `0.0.0.0:8787`; the client must
 use the computer's LAN address. Dashboard/admin operations have no authentication
 and CORS is permissive; the vendor page requires its dealer key, and the farmer
-account endpoint requires its bearer session token. Dealer keys are demo
+account and payment endpoints require the farmer's bearer session token. Dealer keys are demo
 credentials, not a substitute for production authentication. Keep this demo on a
 trusted development network.
 
 ## Important operational notes
 
 - **Never run `harness/target/debug/ln_harness` while this API is running.**
-  The `data/ln` node state was copied from the harness runs and shares node ID
-  identities and ports 9735/9736 — a second instance of the same node will
-  conflict.
-- The Lightning storage keeps the channel opened during the harness proof
-  (40,000 sats channel, funder → dealer) plus ~59,800 spendable on-chain sats
-  from the Mutinynet faucet.
+  They use the same ports (9735/9736), and node state copied from harness runs
+  shares its node identities — a second instance of the same node will conflict.
+- `data/ln` is not in the repository. A fresh checkout has new, unfunded nodes;
+  fund them and open the channel as described in the main README.
 - First wallet sync can take a while (Mutinynet Esplora throttles with HTTP
   429 back-off); the vendored patch raises the BDK sync timeout to 120s.
 - Payment policy (whitelist + voucher naira balance) is enforced server-side.

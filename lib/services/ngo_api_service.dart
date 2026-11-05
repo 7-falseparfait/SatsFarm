@@ -11,6 +11,7 @@ const String ngoApiBaseUrl = String.fromEnvironment(
 );
 
 /// Thrown for API errors with an optional human-friendly message from the API.
+/// Status 0 means no usable answer arrived, so the outcome is unknown.
 class NgoApiException implements Exception {
   NgoApiException(this.status, {this.message});
 
@@ -52,18 +53,27 @@ class NgoApiService {
       return body;
     } on TimeoutException {
       throw NgoApiException(0, message: null);
-    } on SocketException {
+    } on IOException {
+      throw NgoApiException(0);
+    } on FormatException {
       throw NgoApiException(0);
     }
   }
 
   Future<Map<String, dynamic>> postJson(
     String path,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    String? bearerToken,
+  }) async {
     try {
       final request = await client.postUrl(_uri(path));
       request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      if (bearerToken != null) {
+        request.headers.set(
+          HttpHeaders.authorizationHeader,
+          'Bearer $bearerToken',
+        );
+      }
       request.write(jsonEncode(payload));
       final response = await request.close().timeout(
         const Duration(seconds: 12),
@@ -73,7 +83,9 @@ class NgoApiService {
       return body;
     } on TimeoutException {
       throw NgoApiException(0, message: null);
-    } on SocketException {
+    } on IOException {
+      throw NgoApiException(0);
+    } on FormatException {
       throw NgoApiException(0);
     }
   }
@@ -162,6 +174,28 @@ class VoucherRecord {
 
   double get spentFraction =>
       amount <= 0 ? 0 : ((amount - remainingNgn) / amount).clamp(0.0, 1.0);
+}
+
+/// What a farmer reviews before approving a dealer payment.
+class PaymentPreview {
+  const PaymentPreview({
+    required this.dealer,
+    required this.amountNgn,
+    required this.amountSats,
+    required this.availableAfterNgn,
+  });
+
+  factory PaymentPreview.fromMap(Map<String, dynamic> map) => PaymentPreview(
+    dealer: map['dealer'] as String? ?? '',
+    amountNgn: (map['amountNgn'] as num? ?? 0).toInt(),
+    amountSats: (map['amountSats'] as num? ?? 0).toInt(),
+    availableAfterNgn: (map['availableAfterNgn'] as num? ?? 0).toInt(),
+  );
+
+  final String dealer;
+  final int amountNgn;
+  final int amountSats;
+  final int availableAfterNgn;
 }
 
 /// Payment states as returned by GET /api/payments/{id}.

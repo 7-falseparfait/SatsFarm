@@ -13,7 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use chrono::{Local, Utc};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
@@ -22,6 +22,10 @@ pub mod ln;
 
 type Db = Arc<Mutex<Connection>>;
 const INVITE_LIFETIME_SECONDS: i64 = 24 * 60 * 60;
+/// Enough for ₦200,000 of demo payments at the fixed rate.
+const DEMO_CHANNEL_SATS: u64 = 40_000;
+/// The channel, LDK's default 25,000-sat anchor reserve, and on-chain fees.
+const DEMO_CHANNEL_FUNDING_SATS: u64 = 70_000;
 
 #[derive(Clone)]
 struct AppState {
@@ -220,6 +224,13 @@ struct RequestPayment {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PreviewPayment {
+    voucher_id: String,
+    invoice: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DealerInvoiceRequest {
     amount_ngn: i64,
 }
@@ -297,8 +308,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/vouchers/{id}/repayments", post(record_repayment))
         .route("/api/payments", get(list_payments))
         .route("/api/payments/{id}", get(get_payment))
+        .route("/api/payments/preview", post(preview_payment))
         .route("/api/payments/request", post(request_payment))
         .route("/api/funder/receive-address", post(funder_receive_address))
+        .route("/api/funder/open-dealer-channel", post(open_dealer_channel))
         .route("/api/dealers", get(list_dealers))
         .route("/api/dealers/demo", get(list_demo_dealers))
         .route(
@@ -317,7 +330,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/dealers/invoices/{id}", get(get_dealer_invoice))
         .route("/api/dealers/invoices/history", get(dealer_invoice_history))
-        .route("/api/ln/payment/{payment_hash}", get(lightning_payment_proof))
+        .route(
+            "/api/ln/payment/{payment_hash}",
+            get(lightning_payment_proof),
+        )
         .route("/api/ln/status", get(ln_status))
         .route("/api/demo/reset", post(reset_demo))
         .layer(cors)
@@ -600,28 +616,8 @@ async fn farmer_account(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<FarmerAccount>, ApiError> {
-    let token = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|header| header.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| ApiError {
-            error: "session_required".to_owned(),
-            status: StatusCode::UNAUTHORIZED,
-        })?;
     let db = state.db.lock().map_err(internal_error)?;
-    let farmer_id = db
-        .query_row(
-            "SELECT farmer_id FROM invite_codes WHERE session_token = ?1 AND used = 1",
-            [token],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(internal_error)?
-        .ok_or_else(|| ApiError {
-            error: "session_required".to_owned(),
-            status: StatusCode::UNAUTHORIZED,
-        })?;
+    let farmer_id = session_farmer_id(&db, &headers)?;
     let farmer_name = db
         .query_row(
             "SELECT name FROM farmers WHERE id = ?1",
@@ -643,16 +639,16 @@ async fn farmer_account(
                 FROM vouchers WHERE farmer_id = ?1
                 UNION ALL
                 SELECT 'Payment', dealer, amount_ngn, time, NULL, NULL
-                FROM payments WHERE farmer_id = ?1 AND state = 'Settled'
+                FROM payments WHERE farmer_id = ?1 AND state = 'Settled' AND voucher_id IS NOT NULL
                 UNION ALL
                 SELECT 'Repayment', repayment_type, amount_ngn, time, repayment_type, note
                 FROM repayments WHERE voucher_id IN (
                     SELECT id FROM vouchers WHERE farmer_id = ?1
                 )
-             ) ORDER BY time DESC",
+             )",
         )
         .map_err(internal_error)?;
-    let history = statement
+    let mut history = statement
         .query_map([&farmer_id], |row| {
             Ok(FarmerHistoryEntry {
                 kind: row.get(0)?,
@@ -666,12 +662,77 @@ async fn farmer_account(
         .map_err(internal_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(internal_error)?;
+    history.sort_by_key(|entry| std::cmp::Reverse(record_time_sort_key(&entry.time)));
+    for entry in &mut history {
+        entry.time = record_time_label(&entry.time);
+    }
     Ok(Json(FarmerAccount {
         farmer_id,
         farmer_name,
         balance_ngn,
         history,
     }))
+}
+
+/// The farmer behind this request's bearer session token, or 401.
+fn session_farmer_id(db: &Connection, headers: &axum::http::HeaderMap) -> Result<String, ApiError> {
+    let unauthorized = || ApiError {
+        error: "session_required".to_owned(),
+        status: StatusCode::UNAUTHORIZED,
+    };
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|header| header.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(unauthorized)?;
+    db.query_row(
+        "SELECT farmer_id FROM invite_codes WHERE session_token = ?1 AND used = 1",
+        [token],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(internal_error)?
+    .ok_or_else(unauthorized)
+}
+
+/// Stored times come in three shapes: RFC 3339, "05 Nov 2026, 16:23", and the
+/// date-only "18 Oct 2026". Seed rows such as "Today, 10:42" do not parse.
+fn parse_record_time(raw: &str) -> Option<DateTime<Local>> {
+    if let Ok(time) = DateTime::parse_from_rfc3339(raw) {
+        return Some(time.with_timezone(&Local));
+    }
+    let naive = NaiveDateTime::parse_from_str(raw, "%d %b %Y, %H:%M")
+        .ok()
+        .or_else(|| {
+            NaiveDate::parse_from_str(raw, "%d %b %Y")
+                .ok()?
+                .and_hms_opt(0, 0, 0)
+        })?;
+    naive.and_local_timezone(Local).earliest()
+}
+
+fn record_time_sort_key(raw: &str) -> i64 {
+    parse_record_time(raw).map_or(i64::MIN, |time| time.timestamp())
+}
+
+/// What people read: RFC 3339 becomes "05 Nov 2026, 16:23"; others are unchanged.
+fn record_time_label(raw: &str) -> String {
+    match DateTime::parse_from_rfc3339(raw) {
+        Ok(time) => time
+            .with_timezone(&Local)
+            .format("%d %b %Y, %H:%M")
+            .to_string(),
+        Err(_) => raw.to_owned(),
+    }
+}
+
+fn newest_vouchers_first(mut vouchers: Vec<Voucher>) -> Vec<Voucher> {
+    vouchers.sort_by_key(|voucher| std::cmp::Reverse(record_time_sort_key(&voucher.created_at)));
+    for voucher in &mut vouchers {
+        voucher.created_at = record_time_label(&voucher.created_at);
+    }
+    vouchers
 }
 
 fn redeemed_farmer(
@@ -718,7 +779,7 @@ async fn list_vouchers(State(state): State<AppState>) -> Result<Json<Vec<Voucher
     let vouchers = rows
         .collect::<Result<Vec<_>, _>>()
         .map_err(internal_error)?;
-    Ok(Json(vouchers))
+    Ok(Json(newest_vouchers_first(vouchers)))
 }
 
 async fn list_farmer_vouchers(
@@ -760,7 +821,7 @@ async fn list_farmer_vouchers(
     let vouchers = rows
         .collect::<Result<Vec<_>, _>>()
         .map_err(internal_error)?;
-    Ok(Json(vouchers))
+    Ok(Json(newest_vouchers_first(vouchers)))
 }
 
 /// Farmers' app registration: binds the device wallet to a program profile.
@@ -914,7 +975,7 @@ async fn create_voucher(
         "SF-{}",
         uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase()
     );
-    let created_at = Utc::now().format("%d %b %Y").to_string();
+    let created_at = Utc::now().to_rfc3339();
     db.execute("INSERT INTO vouchers (id, farmer_id, purpose, amount_ngn, remaining_ngn, created_at, status, kind) VALUES (?1, ?2, ?3, ?4, ?4, ?5, 'Active', ?6)",
         params![id, farmer_id, purpose, input.amount, created_at, kind]).map_err(internal_error)?;
     Ok((
@@ -926,7 +987,7 @@ async fn create_voucher(
             amount: input.amount,
             remaining_ngn: input.amount,
             amount_owed_ngn: if kind == "Loan" { input.amount } else { 0 },
-            created_at,
+            created_at: record_time_label(&created_at),
             status: "Active".into(),
             kind,
         }),
@@ -1683,22 +1744,19 @@ async fn lightning_payment_proof(
     axum::extract::Path(payment_hash_hex): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let payment_hash_hex = payment_hash_hex.trim().to_lowercase();
-    if payment_hash_hex.len() != 64
-        || !payment_hash_hex.chars().all(|c| c.is_ascii_hexdigit())
-    {
+    if payment_hash_hex.len() != 64 || !payment_hash_hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(ApiError::bad_request(
             "A payment hash is 64 hex characters.".to_string(),
         ));
     }
     let db = state.db.lock().map_err(internal_error)?;
-    let row: Option<(String, Option<String>, Option<i64>, Option<String>, Option<i64>)> = db
+    let row: Option<(String, i64, i64, Option<String>, i64)> = db
         .query_row(
-            "SELECT d.dealer, d.amount_ngn, d.amount_sats, p.preimage, d.rate_used
-             FROM dealer_invoices d
-             LEFT JOIN payments p ON p.payment_hash = d.payment_hash AND p.state = 'Settled'
-             WHERE d.payment_hash = ?1
-             GROUP BY d.id
-             ORDER BY d.created_at DESC LIMIT 1",
+            "SELECT dealer.name, invoice.amount_ngn, invoice.amount_sats, payment.preimage, invoice.rate_used
+             FROM dealer_invoices invoice
+             JOIN dealers dealer ON dealer.id = invoice.dealer_id
+             LEFT JOIN payments payment ON payment.payment_hash = invoice.payment_hash AND payment.state = 'Settled'
+             WHERE invoice.payment_hash = ?1",
             [&payment_hash_hex],
             |row| {
                 Ok((
@@ -1723,16 +1781,14 @@ async fn lightning_payment_proof(
     let preimage_bytes = preimage.as_ref().map(|hex_preimage| {
         (0..hex_preimage.len() / 2)
             .map(|index| {
-                u8::from_str_radix(&hex_preimage[index * 2..index * 2 + 2], 16)
-                    .unwrap_or_default()
+                u8::from_str_radix(&hex_preimage[index * 2..index * 2 + 2], 16).unwrap_or_default()
             })
             .collect::<Vec<u8>>()
     });
     let preimage_hashes_to_payment_hash = preimage_bytes
         .as_deref()
         .map(|bytes| {
-            ldk_node::bitcoin::hashes::sha256::Hash::hash(bytes).to_string()
-                == payment_hash_hex
+            ldk_node::bitcoin::hashes::sha256::Hash::hash(bytes).to_string() == payment_hash_hex
         })
         .unwrap_or(false);
     Ok(Json(serde_json::json!({
@@ -1746,10 +1802,7 @@ async fn lightning_payment_proof(
         "rateUsedNgnPerSat": rate_used,
         "preimage": preimage,
         "preimageSha256MatchesPaymentHash": preimage_hashes_to_payment_hash,
-        "verification": format!(
-            "sha256(hex-decoded preimage) == payment hash if {}",
-            payment_hash_hex
-        ),
+        "verification": "The payment is proven when sha256(hex-decoded preimage) equals paymentHash.",
     })))
 }
 
@@ -1828,22 +1881,138 @@ async fn funder_receive_address() -> Result<Json<serde_json::Value>, ApiError> {
     })))
 }
 
-/// Mint a BOLT11 invoice on the demo dealer node so the whole flow can be
-/// exercised end-to-end without an external dealer paying-in.
-async fn request_payment(
-    State(state): State<AppState>,
-    Json(input): Json<RequestPayment>,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let invoice_str = input.invoice.trim();
-    if invoice_str.is_empty() {
+/// Opens the funder -> dealer demo channel. Fund the node first with
+/// /api/funder/receive-address; the channel is usable once it confirms, which
+/// /api/ln/status reports.
+async fn open_dealer_channel() -> Result<Json<serde_json::Value>, ApiError> {
+    match ln::open_dealer_channel(DEMO_CHANNEL_SATS) {
+        Ok(opened) => Ok(Json(
+            serde_json::json!({ "opened": opened, "channelSats": DEMO_CHANNEL_SATS }),
+        )),
+        Err(ln::LnError::NotRunning) => Err(ApiError {
+            error: "Funder node is not ready yet. Try again after Lightning finishes starting."
+                .to_string(),
+            status: StatusCode::SERVICE_UNAVAILABLE,
+        }),
+        Err(error) => Err(ApiError::bad_request(format!(
+            "Could not open the channel ({error:?}). The funder needs about {DEMO_CHANNEL_FUNDING_SATS} confirmed on-chain sats: the channel, a reserve, and fees."
+        ))),
+    }
+}
+
+/// The checks a voucher payment must pass, shared by the farmer's review step
+/// and the payment itself so what they approve is what is enforced.
+struct PaymentCheck {
+    dealer: String,
+    available_ngn: i64,
+}
+
+/// The voucher's status and remaining naira, if this farmer owns it.
+fn owned_voucher(
+    db: &Connection,
+    voucher_id: &str,
+    farmer_id: &str,
+) -> Result<(String, i64), ApiError> {
+    let voucher: Option<(String, i64, String)> = db
+        .query_row(
+            "SELECT farmer_id, remaining_ngn, status FROM vouchers WHERE id = ?1",
+            [voucher_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(internal_error)?;
+    let Some((owner, remaining_ngn, status)) = voucher else {
+        return Err(ApiError::bad_request(format!(
+            "Voucher {voucher_id} was not found."
+        )));
+    };
+    if owner != farmer_id {
+        return Err(ApiError {
+            error: "This voucher belongs to another farmer.".to_string(),
+            status: StatusCode::FORBIDDEN,
+        });
+    }
+    Ok((status, remaining_ngn))
+}
+
+fn check_voucher_payment(
+    db: &Connection,
+    voucher_id: &str,
+    farmer_id: &str,
+    payee_hex: &str,
+    payment_hash_hex: &str,
+    needed_ngn: i64,
+) -> Result<PaymentCheck, ApiError> {
+    let (status, remaining_ngn) = owned_voucher(db, voucher_id, farmer_id)?;
+    if status != "Active" {
+        return Err(ApiError::bad_request(format!(
+            "Voucher {voucher_id} is no longer active."
+        )));
+    }
+    // Pending payments hold their value until they settle or fail. The caller
+    // keeps the database lock from here through the insert, so this is atomic.
+    let pending_ngn: i64 = db
+        .query_row(
+            "SELECT COALESCE(SUM(amount_ngn), 0) FROM payments WHERE voucher_id = ?1 AND state = 'Pending'",
+            [voucher_id],
+            |row| row.get(0),
+        )
+        .map_err(internal_error)?;
+    let available_ngn = remaining_ngn - pending_ngn;
+    if needed_ngn > available_ngn {
+        return Err(ApiError::bad_request(format!(
+            "This dealer invoice needs {needed_ngn} NGN at the demo rate; the voucher has {available_ngn} NGN available."
+        )));
+    }
+    // Demo dealers share one node, so the invoice names the shop, not the node.
+    let dealer = db
+        .query_row(
+            "SELECT dealer.name FROM dealer_invoices invoice
+             JOIN dealers dealer ON dealer.id = invoice.dealer_id
+             WHERE invoice.payment_hash = ?1 AND dealer.node_id = ?2 AND dealer.whitelisted = 1",
+            params![payment_hash_hex, payee_hex],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(internal_error)?;
+    let dealer = match dealer {
+        Some(name) => Some(name),
+        None => db
+            .query_row(
+                "SELECT name FROM dealers WHERE node_id = ?1 AND whitelisted = 1 ORDER BY id LIMIT 1",
+                [payee_hex],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(internal_error)?,
+    };
+    let Some(dealer) = dealer else {
+        return Err(ApiError::bad_request(format!(
+            "Node ID {payee_hex} is not whitelisted for dealer payments."
+        )));
+    };
+    Ok(PaymentCheck {
+        dealer,
+        available_ngn,
+    })
+}
+
+/// Parses an invoice into what a voucher payment needs: (invoice, sats, naira).
+fn parse_payment_invoice(invoice: &str) -> Result<(ln::ParsedInvoice, i64, i64), ApiError> {
+    if invoice.is_empty() {
         return Err(ApiError::bad_request("invoice is required.".to_string()));
     }
-    let parsed = ln::parse_invoice(invoice_str).map_err(|e| {
+    let parsed = ln::parse_invoice(invoice).map_err(|e| {
         ApiError::bad_request(match e {
             ln::LnError::InvalidInvoice(message) => format!("Invalid invoice: {message}"),
             other => format!("Could not read the invoice: {other:?}"),
         })
     })?;
+    if parsed.invoice.is_expired() {
+        return Err(ApiError::bad_request(
+            "This invoice has expired. Ask the dealer for a new one.".to_string(),
+        ));
+    }
     if parsed.amount_msat % 1000 != 0 {
         return Err(ApiError::bad_request(
             "Voucher payments cover whole sats only; the invoice's msat remainder is not allowed."
@@ -1859,6 +2028,59 @@ async fn request_payment(
             "The invoice cost exceeds this demo's N10,000,000 voucher ceiling.".to_string(),
         ));
     }
+    Ok((parsed, amount_sats, needed_ngn))
+}
+
+/// What the farmer reviews before approving: runs every payment check and pays
+/// nothing.
+async fn preview_payment(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(input): Json<PreviewPayment>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (parsed, amount_sats, needed_ngn) = parse_payment_invoice(input.invoice.trim())?;
+    let db = state.db.lock().map_err(internal_error)?;
+    let farmer_id = session_farmer_id(&db, &headers)?;
+    let used: Option<String> = db
+        .query_row(
+            "SELECT state FROM payments WHERE payment_hash = ?1 ORDER BY sort_order DESC LIMIT 1",
+            [&parsed.payment_hash_hex],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(internal_error)?;
+    if let Some(used) = used {
+        return Err(ApiError::conflict(format!(
+            "This invoice has already been used (payment {}). Ask the dealer for a new one.",
+            used.to_lowercase()
+        )));
+    }
+    let check = check_voucher_payment(
+        &db,
+        &input.voucher_id,
+        &farmer_id,
+        &parsed.payee.to_string(),
+        &parsed.payment_hash_hex,
+        needed_ngn,
+    )?;
+    Ok(Json(serde_json::json!({
+        "dealer": check.dealer,
+        "amountNgn": needed_ngn,
+        "amountSats": amount_sats,
+        "availableAfterNgn": check.available_ngn - needed_ngn,
+        "rateLabel": ln::RATE_LABEL,
+    })))
+}
+
+/// Pays a dealer invoice from a voucher. Only the farmer who owns the voucher
+/// can approve this, using the session from their invite.
+async fn request_payment(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(input): Json<RequestPayment>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let invoice_str = input.invoice.trim();
+    let (parsed, amount_sats, needed_ngn) = parse_payment_invoice(invoice_str)?;
     let client_key = input
         .idempotency_key
         .as_deref()
@@ -1868,16 +2090,23 @@ async fn request_payment(
         .unwrap_or_else(|| parsed.payment_hash_hex.clone());
 
     let db = state.db.lock().map_err(internal_error)?;
-    // Idempotency first: same invoice or same client key -> existing row.
-    let existing: Option<String> = db
+    let farmer_id = session_farmer_id(&db, &headers)?;
+    owned_voucher(&db, &input.voucher_id, &farmer_id)?;
+    // Idempotency next: same invoice or same client key -> existing row.
+    let existing: Option<(String, Option<String>)> = db
         .query_row(
-            "SELECT id FROM payments WHERE payment_hash = ?1 OR (idempotency_key = ?2 AND idempotency_key IS NOT NULL) ORDER BY sort_order DESC LIMIT 1",
+            "SELECT id, voucher_id FROM payments WHERE payment_hash = ?1 OR (idempotency_key = ?2 AND idempotency_key IS NOT NULL) ORDER BY sort_order DESC LIMIT 1",
             params![parsed.payment_hash_hex, client_key],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(internal_error)?;
-    if let Some(id) = existing {
+    if let Some((id, voucher_id)) = existing {
+        if voucher_id.as_deref() != Some(input.voucher_id.as_str()) {
+            return Err(ApiError::conflict(
+                "This invoice has already been used with another voucher.".to_string(),
+            ));
+        }
         let payment = load_payment(&db, &id)?;
         return Ok((
             StatusCode::OK,
@@ -1885,50 +2114,15 @@ async fn request_payment(
         ));
     }
 
-    // Voucher check.
-    let voucher: Option<(String, i64, String)> = db
-        .query_row(
-            "SELECT farmer_id, remaining_ngn, status FROM vouchers WHERE id = ?1",
-            [&input.voucher_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()
-        .map_err(internal_error)?;
-    let Some((farmer_id, remaining_ngn, _voucher_status)) = voucher else {
-        return Err(ApiError::bad_request(format!(
-            "Voucher {} was not found.",
-            input.voucher_id
-        )));
-    };
-    if needed_ngn > remaining_ngn {
-        return Err(ApiError::bad_request(format!(
-            "This dealer invoice needs {needed_ngn} NGN at the demo rate; the voucher holds {remaining_ngn} NGN."
-        )));
-    }
-
-    // Whitelist check on the invoice's payee node ID.
-    let payee_hex = parsed.payee.to_string();
-    let whitelisted: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM dealers WHERE node_id = ?1 AND whitelisted = 1)",
-            [&payee_hex],
-            |row| row.get(0),
-        )
-        .map_err(internal_error)?;
-    if !whitelisted {
-        return Err(ApiError::bad_request(format!(
-            "Node ID {payee_hex} is not whitelisted for dealer payments."
-        )));
-    }
-    let dealer_label: String = db
-        .query_row(
-            "SELECT name FROM dealers WHERE node_id = ?1 AND whitelisted = 1",
-            [&payee_hex],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(internal_error)?
-        .unwrap_or_else(|| format!("Lightning dealer {}", payee_hex[2..10].to_uppercase()));
+    let dealer_label = check_voucher_payment(
+        &db,
+        &input.voucher_id,
+        &farmer_id,
+        &parsed.payee.to_string(),
+        &parsed.payment_hash_hex,
+        needed_ngn,
+    )?
+    .dealer;
 
     // Insert Pending row, then attempt the send; synchronous errors move the
     // row to Failed immediately.
@@ -2251,7 +2445,7 @@ fn seed_demo_data(db: &Connection) -> rusqlite::Result<()> {
             "F-1042",
             "Gidan Noma Agro",
             18000,
-            8200,
+            3600,
             "Settled",
             "Today, 10:42",
             4,
@@ -2261,7 +2455,7 @@ fn seed_demo_data(db: &Connection) -> rusqlite::Result<()> {
             "F-1044",
             "Northern Seeds Co.",
             12500,
-            5700,
+            2500,
             "Pending",
             "Today, 09:18",
             3,
@@ -2271,7 +2465,7 @@ fn seed_demo_data(db: &Connection) -> rusqlite::Result<()> {
             "F-1043",
             "Kano Farm Inputs",
             9500,
-            4300,
+            1900,
             "Settled",
             "Yesterday, 16:05",
             2,
@@ -2281,7 +2475,7 @@ fn seed_demo_data(db: &Connection) -> rusqlite::Result<()> {
             "F-1045",
             "Sokoto Growers Supply",
             7200,
-            3300,
+            1440,
             "Failed",
             "Yesterday, 13:27",
             1,
@@ -2773,5 +2967,245 @@ mod invite_tests {
         .unwrap();
         assert_eq!(joined.farmer_name, "Demo Farmer");
         assert_eq!(joined.balance_ngn, 52_500);
+    }
+
+    fn demo_voucher_payment(
+        state: &AppState,
+        voucher_id: &str,
+        farmer_id: &str,
+        hash: &str,
+        ngn: i64,
+        payment_state: &str,
+    ) {
+        state.db.lock().unwrap().execute(
+            "INSERT INTO payments (id, farmer_id, dealer, amount_ngn, amount_sats, state, time, sort_order, voucher_id, payment_hash, rate_used)
+             VALUES (?1, ?2, 'Shop', ?3, ?3 / 5, ?4, '05 Nov 2026, 16:23', 1, ?5, ?6, 5)",
+            params![format!("PAY-{hash}"), farmer_id, ngn, payment_state, voucher_id, hash],
+        )
+        .unwrap();
+    }
+
+    fn first_voucher(state: &AppState, farmer_id: &str) -> (String, i64) {
+        state
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT id, remaining_ngn FROM vouchers WHERE farmer_id = ?1",
+                [farmer_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+    }
+
+    fn session_headers(token: &str) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        headers
+    }
+
+    #[tokio::test]
+    async fn payment_routes_require_the_farmer_who_owns_the_voucher() {
+        let state = test_state();
+        let farmer = create_farmer(&state).await;
+        let (voucher_id, _) = first_voucher(&state, &farmer.id);
+        let body = || RequestPayment {
+            voucher_id: voucher_id.clone(),
+            invoice: "not-checked-until-parsed".to_owned(),
+            idempotency_key: None,
+        };
+        // A bad invoice is refused before auth, so auth is tested directly.
+        assert!(
+            request_payment(State(state.clone()), Default::default(), Json(body()))
+                .await
+                .is_err()
+        );
+        let db = state.db.lock().unwrap();
+        assert_eq!(
+            session_farmer_id(&db, &Default::default())
+                .unwrap_err()
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            session_farmer_id(&db, &session_headers("guessed-token"))
+                .unwrap_err()
+                .status,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            owned_voucher(&db, &voucher_id, "F-other")
+                .unwrap_err()
+                .status,
+            StatusCode::FORBIDDEN
+        );
+        assert!(owned_voucher(&db, &voucher_id, &farmer.id).is_ok());
+    }
+
+    #[tokio::test]
+    async fn pending_payments_hold_voucher_balance_and_failed_ones_release_it() {
+        let state = test_state();
+        let dealers = ensure_demo_dealers(&state, "demo-node").unwrap();
+        assert_eq!(dealers.len(), 2);
+        let farmer = create_farmer(&state).await; // ₦52,500
+        let (voucher_id, _) = first_voucher(&state, &farmer.id);
+        demo_voucher_payment(&state, &voucher_id, &farmer.id, "hash-a", 50_000, "Pending");
+
+        let db = state.db.lock().unwrap();
+        let refused =
+            check_voucher_payment(&db, &voucher_id, &farmer.id, "demo-node", "hash-b", 5_000)
+                .err()
+                .unwrap();
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+        assert!(refused.error.contains("2500 NGN available"));
+
+        ln::apply_failure(&db, "hash-a", Some("no route")).unwrap();
+        let allowed =
+            check_voucher_payment(&db, &voucher_id, &farmer.id, "demo-node", "hash-b", 5_000)
+                .unwrap();
+        assert_eq!(allowed.available_ngn, 52_500);
+    }
+
+    #[tokio::test]
+    async fn non_whitelisted_dealers_are_refused() {
+        let state = test_state();
+        let farmer = create_farmer(&state).await;
+        let (voucher_id, _) = first_voucher(&state, &farmer.id);
+        let db = state.db.lock().unwrap();
+        let refused =
+            check_voucher_payment(&db, &voucher_id, &farmer.id, "unknown-node", "hash", 5_000)
+                .err()
+                .unwrap();
+        assert!(refused.error.contains("not whitelisted"));
+    }
+
+    #[tokio::test]
+    async fn settlement_debits_a_voucher_exactly_once() {
+        let state = test_state();
+        let farmer = create_farmer(&state).await; // ₦52,500
+        let (voucher_id, _) = first_voucher(&state, &farmer.id);
+        demo_voucher_payment(&state, &voucher_id, &farmer.id, "hash-a", 5_000, "Pending");
+        {
+            let db = state.db.lock().unwrap();
+            assert!(ln::apply_settlement(&db, "hash-a", Some("ab".to_owned())).unwrap());
+            // A redelivered event, or a reconcile after a restart, changes nothing.
+            assert!(!ln::apply_settlement(&db, "hash-a", Some("ab".to_owned())).unwrap());
+        }
+        assert_eq!(first_voucher(&state, &farmer.id).1, 47_500);
+
+        demo_voucher_payment(&state, &voucher_id, &farmer.id, "hash-b", 47_500, "Pending");
+        let db = state.db.lock().unwrap();
+        ln::apply_settlement(&db, "hash-b", None).unwrap();
+        let (remaining, status): (i64, String) = db
+            .query_row(
+                "SELECT remaining_ngn, status FROM vouchers WHERE id = ?1",
+                [&voucher_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((remaining, status.as_str()), (0, "Spent"));
+    }
+
+    #[tokio::test]
+    async fn payments_are_labelled_with_the_shop_that_issued_the_invoice() {
+        let state = test_state();
+        ensure_demo_dealers(&state, "demo-node").unwrap();
+        let farmer = create_farmer(&state).await;
+        let (voucher_id, _) = first_voucher(&state, &farmer.id);
+        let db = state.db.lock().unwrap();
+        db.execute(
+            "INSERT INTO dealer_invoices (id, dealer_id, amount_ngn, amount_sats, rate_used, invoice, payment_hash, state, created_at, expires_at)
+             SELECT 'sale', id, 5000, 1000, 5, 'lntbs', 'northern-hash', 'Pending', 0, 9 FROM dealers WHERE name = 'Northern Seeds Co.'",
+            [],
+        )
+        .unwrap();
+        let check = check_voucher_payment(
+            &db,
+            &voucher_id,
+            &farmer.id,
+            "demo-node",
+            "northern-hash",
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(check.dealer, "Northern Seeds Co.");
+    }
+
+    #[tokio::test]
+    async fn public_proof_verifies_a_settled_payment() {
+        let state = test_state();
+        ensure_demo_dealers(&state, "demo-node").unwrap();
+        let farmer = create_farmer(&state).await;
+        let (voucher_id, _) = first_voucher(&state, &farmer.id);
+        // sha256 of 32 zero bytes.
+        let hash = "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925";
+        let preimage = "00".repeat(32);
+        {
+            let db = state.db.lock().unwrap();
+            db.execute(
+                "INSERT INTO dealer_invoices (id, dealer_id, amount_ngn, amount_sats, rate_used, invoice, payment_hash, state, created_at, expires_at)
+                 SELECT 'sale', id, 5000, 1000, 5, 'lntbs', ?1, 'Received', 0, 9 FROM dealers WHERE name = 'Northern Seeds Co.'",
+                [hash],
+            )
+            .unwrap();
+        }
+        let path = || axum::extract::Path(hash.to_owned());
+        let Json(unpaid) = lightning_payment_proof(State(state.clone()), path())
+            .await
+            .unwrap();
+        assert_eq!(unpaid["status"], "Not settled");
+
+        demo_voucher_payment(&state, &voucher_id, &farmer.id, hash, 5_000, "Pending");
+        ln::apply_settlement(&state.db.lock().unwrap(), hash, Some(preimage)).unwrap();
+        let Json(proof) = lightning_payment_proof(State(state.clone()), path())
+            .await
+            .unwrap();
+        assert_eq!(proof["status"], "Settled");
+        assert_eq!(proof["preimageSha256MatchesPaymentHash"], true);
+        assert_eq!(proof["paidToDealer"], "Northern Seeds Co.");
+        assert_eq!(proof["amountNgn"], 5000);
+    }
+
+    #[tokio::test]
+    async fn history_is_newest_first_with_readable_times() {
+        let state = test_state();
+        let farmer = create_farmer(&state).await;
+        let (voucher_id, _) = first_voucher(&state, &farmer.id);
+        {
+            let db = state.db.lock().unwrap();
+            db.execute(
+                "INSERT INTO payments (id, farmer_id, dealer, amount_ngn, amount_sats, state, time, sort_order, voucher_id, payment_hash)
+                 VALUES ('future', ?1, 'Shop', 5, 1, 'Settled', '05 Nov 2099, 16:23', 1, ?2, 'h1'),
+                        ('fixture', ?1, 'Fixture', 5, 1, 'Settled', 'Today, 10:42', 2, NULL, NULL)",
+                params![farmer.id, voucher_id],
+            )
+            .unwrap();
+        }
+        let Json(redeemed) = redeem_invite(
+            State(state.clone()),
+            Json(RedeemInvite {
+                code: farmer.invite_code.unwrap(),
+                client_id: "history-order-test-client".to_owned(),
+            }),
+        )
+        .await
+        .unwrap();
+        let Json(account) = farmer_account(State(state), session_headers(&redeemed.session_token))
+            .await
+            .unwrap();
+        assert_eq!(
+            account.history.len(),
+            2,
+            "seed fixtures are not farmer history"
+        );
+        assert_eq!(account.history[0].time, "05 Nov 2099, 16:23");
+        assert!(
+            !account.history[1].time.contains('T'),
+            "{}",
+            account.history[1].time
+        );
     }
 }

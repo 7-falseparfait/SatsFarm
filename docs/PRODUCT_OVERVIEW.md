@@ -168,20 +168,18 @@ anti-fraud system. In particular:
   CORS. Keep it on a trusted development network.
 - Dealer page access uses a demo dealer key. Treat dealer keys as demo
   credentials, not production identity or authorization.
-- Farmer account reads use a session token, but the current voucher-payment
-  request is not bound to that farmer session. The voucher ID and dealer
-  whitelist checks are not a complete production authorization system.
-- The current payment flow checks the remaining voucher balance before
-  submission but does not reserve balance for a pending payment. Concurrent
-  payment attempts need atomic holds/reservations before real deployment.
+- Voucher payments require the session of the farmer who owns the voucher, but
+  that session comes from a demo invite code with no phone verification or PIN.
+  Voucher lists can still be read by farmer ID without a session.
+- Pending payments hold voucher balance within this single-process SQLite demo.
+  A real deployment needs holds designed for its actual database and scale.
 - The ₦5-per-sat rate is fixed demo configuration, not market pricing.
 - Payment settlement records do not verify physical goods, delivery, price
   fairness, or farmer consent beyond the app's approval action.
 - Mutinynet coins are valueless test assets; no mainnet funds should be used.
 
 Before a real pilot, add authenticated and role-scoped dashboard access,
-session-bound payment authorization, atomic voucher balance reservations,
-audited operator actions, secure key management, operational monitoring,
+stronger farmer authentication, audited operator actions, secure key management, operational monitoring,
 dispute/refund procedures, and a reviewed pricing and custody model. Test these
 controls with the intended communities and obtain appropriate legal and
 financial guidance.

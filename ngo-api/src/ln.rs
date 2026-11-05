@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use ldk_node::bitcoin::secp256k1::PublicKey;
+use ldk_node::config::Config;
 use ldk_node::lightning::ln::msgs::SocketAddress;
 use ldk_node::lightning_invoice::{Bolt11Invoice, Bolt11InvoiceDescription, Description};
 use ldk_node::logger::LogLevel;
@@ -99,8 +100,19 @@ pub fn bootstrap(db: Db) {
     });
 }
 
-fn build_node(dir: &str, port: u16, alias: &str) -> ldk_node::Node {
-    let mut builder = Builder::new();
+fn build_node(
+    dir: &str,
+    port: u16,
+    alias: &str,
+    trusted_peer: Option<PublicKey>,
+) -> ldk_node::Node {
+    let mut config = Config::default();
+    if let (Some(peer), Some(anchors)) = (trusted_peer, config.anchor_channels_config.as_mut()) {
+        // Both demo nodes run in this process. Without this the dealer refuses
+        // the funder's anchor channel unless it holds its own on-chain reserve.
+        anchors.trusted_peers_no_reserve.push(peer);
+    }
+    let mut builder = Builder::from_config(config);
     builder
         .set_entropy_seed_path(format!("{dir}/seed"))
         .set_storage_dir_path(dir.to_string())
@@ -115,9 +127,26 @@ fn build_node(dir: &str, port: u16, alias: &str) -> ldk_node::Node {
         .expect("valid node alias")
         .set_filesystem_logger(Some(format!("{dir}/ldk.log")), Some(LogLevel::Debug));
     let node = Arc::new(builder.build().expect("LN node build must succeed"));
-    node.start().expect("LN node start must succeed");
+    start_with_retries(&node, alias);
     eprintln!("[{alias}] started, node_id={}", node.node_id());
     Arc::into_inner(node).expect("freshly built node has no other refs")
+}
+
+/// Startup needs one fee-rate response from Mutinynet within LDK's short timeout.
+/// A slow response must not leave the API running with Lightning dead, so keep
+/// trying for about two minutes. A failed start has not begun running anything.
+fn start_with_retries(node: &Node, alias: &str) {
+    const ATTEMPTS: u32 = 12;
+    for attempt in 1..=ATTEMPTS {
+        match node.start() {
+            Ok(()) => return,
+            Err(error) if attempt < ATTEMPTS => {
+                eprintln!("[{alias}] start attempt {attempt} failed ({error:?}); retrying.");
+                std::thread::sleep(Duration::from_secs(10));
+            }
+            Err(error) => panic!("LN node start must succeed: {error:?}"),
+        }
+    }
 }
 
 fn build_runtime(funder_dir: &str, dealer_dir: &str) -> Result<LnRuntime, String> {
@@ -126,8 +155,13 @@ fn build_runtime(funder_dir: &str, dealer_dir: &str) -> Result<LnRuntime, String
     eprintln!(
         "funding: esplora={MUTINYNET_ESPLORA_URL}, rgs={MUTINYNET_RGS_URL}, rate: {RATE_LABEL}"
     );
-    let funder = Arc::new(build_node(funder_dir, FUNDER_PORT, "FunderNg"));
-    let dealer = Arc::new(build_node(dealer_dir, DEALER_PORT, "DealerNg"));
+    let funder = Arc::new(build_node(funder_dir, FUNDER_PORT, "FunderNg", None));
+    let dealer = Arc::new(build_node(
+        dealer_dir,
+        DEALER_PORT,
+        "DealerNg",
+        Some(funder.node_id()),
+    ));
     // Best-effort first sync; the background sync is authoritative (see
     // lessons from the harness runs - manual syncs can time out with
     // WalletOperationTimeout while Mutinynet Esplora throttles).
@@ -215,22 +249,24 @@ fn reconcile_pending_payments(funder: &Arc<Node>, db: &Db) {
         if let Some(details) = funder.payment(&ldk_node::lightning::ln::channelmanager::PaymentId(
             payment_id_bytes,
         )) {
-            let state = match details.status {
-                ldk_node::payment::PaymentStatus::Succeeded => Some("Settled"),
-                ldk_node::payment::PaymentStatus::Failed => Some("Failed"),
-                ldk_node::payment::PaymentStatus::Pending => None,
-            };
-            if let Some(new_state) = state {
-                let preimage = match &details.kind {
-                    PaymentKind::Bolt11 { preimage, .. } => preimage.map(|p| to_hex(&p.0)),
-                    _ => None,
-                };
-                if let Ok(connection) = db.lock() {
-                    let _ = connection.execute(
-						"UPDATE payments SET state = ?2, preimage = COALESCE(?3, preimage) WHERE payment_hash = ?1 AND state = 'Pending'",
-						params![hash_hex, new_state, preimage],
-					);
+            let Ok(connection) = db.lock() else { return };
+            let result = match details.status {
+                ldk_node::payment::PaymentStatus::Succeeded => {
+                    let preimage = match &details.kind {
+                        PaymentKind::Bolt11 { preimage, .. } => preimage.map(|p| to_hex(&p.0)),
+                        _ => None,
+                    };
+                    apply_settlement(&connection, &hash_hex, preimage).map(|_| ())
                 }
+                ldk_node::payment::PaymentStatus::Failed => apply_failure(
+                    &connection,
+                    &hash_hex,
+                    Some("Failed while the API was offline."),
+                ),
+                ldk_node::payment::PaymentStatus::Pending => Ok(()),
+            };
+            if let Err(error) = result {
+                eprintln!("LN reconcile update failed: {error}");
             }
         }
     }
@@ -327,46 +363,63 @@ fn on_dealer_invoice_received(db: &Db, hash_hex: &str) {
     }
 }
 
+/// Marks a pending payment settled and debits its voucher, as one transaction.
+/// Only the Pending -> Settled transition debits, so a redelivered event or a
+/// startup reconcile can never charge a voucher twice. Returns whether this
+/// call applied the settlement.
+pub fn apply_settlement(
+    connection: &Connection,
+    hash_hex: &str,
+    preimage: Option<String>,
+) -> rusqlite::Result<bool> {
+    let tx = connection.unchecked_transaction()?;
+    let changed = tx.execute(
+        "UPDATE payments SET state = 'Settled', preimage = COALESCE(?2, preimage) WHERE payment_hash = ?1 AND state = 'Pending'",
+        params![hash_hex, preimage],
+    )?;
+    if changed > 0 {
+        tx.execute(
+            "UPDATE vouchers SET
+                status = CASE WHEN remaining_ngn - p.amount_ngn <= 0 THEN 'Spent' ELSE status END,
+                remaining_ngn = MAX(remaining_ngn - p.amount_ngn, 0)
+             FROM (SELECT voucher_id, amount_ngn FROM payments WHERE payment_hash = ?1 AND state = 'Settled') AS p
+             WHERE vouchers.id = p.voucher_id",
+            [hash_hex],
+        )?;
+    }
+    tx.commit()?;
+    Ok(changed > 0)
+}
+
+/// Marks a pending payment and its dealer invoice failed. Nothing was debited.
+pub fn apply_failure(
+    connection: &Connection,
+    hash_hex: &str,
+    reason: Option<&str>,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "UPDATE payments SET state = 'Failed', error_reason = ?2 WHERE payment_hash = ?1 AND state = 'Pending'",
+        params![hash_hex, reason],
+    )?;
+    connection.execute(
+        "UPDATE dealer_invoices SET state = 'Failed' WHERE payment_hash = ?1 AND state = 'Pending'",
+        [hash_hex],
+    )?;
+    Ok(())
+}
+
 fn on_funder_payment_settled(db: &Db, hash_hex: &str, preimage: Option<String>) {
-    let connection = match db.lock() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    if let Err(e) = connection.execute(
-		"UPDATE payments SET state = 'Settled', preimage = COALESCE(?2, preimage) WHERE payment_hash = ?1 AND state = 'Pending'",
-		params![hash_hex, preimage],
-	) {
-		eprintln!("database error on settlement update: {e}");
-		return;
-	}
-    // Deduct the settled naira from the voucher balance (PRD: voucher balances
-    // are denominated in naira and reduced by settled dealer payments).
-    if let Ok((voucher_id, amount_ngn)) = connection.query_row(
-		"SELECT voucher_id, amount_ngn FROM payments WHERE payment_hash = ?1 AND state = 'Settled' ORDER BY sort_order DESC LIMIT 1",
-		params![hash_hex],
-		|row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-	) {
-		let _ = connection.execute(
-			"UPDATE vouchers SET remaining_ngn = MAX(remaining_ngn - ?2, 0), status = CASE WHEN MAX(remaining_ngn - ?2, 0) <= 0 THEN 'Spent' ELSE status END WHERE id = ?3",
-			params![voucher_id, amount_ngn, voucher_id],
-		);
-	}
-    eprintln!("[funder] payment SETTLED hash={hash_hex}");
+    let Ok(connection) = db.lock() else { return };
+    match apply_settlement(&connection, hash_hex, preimage) {
+        Ok(_) => eprintln!("[funder] payment SETTLED hash={hash_hex}"),
+        Err(error) => eprintln!("database error on settlement update: {error}"),
+    }
 }
 
 fn on_funder_payment_failed(db: &Db, hash_hex: &str, reason: Option<String>) {
     let Ok(connection) = db.lock() else { return };
-    let _ = connection
-		.execute(
-			"UPDATE payments SET state = 'Failed', error_reason = ?2 WHERE payment_hash = ?1 AND state = 'Pending'",
-			params![hash_hex, reason],
-		)
-		.ok();
-    if let Err(error) = connection.execute(
-        "UPDATE dealer_invoices SET state = 'Failed' WHERE payment_hash = ?1 AND state = 'Pending'",
-        [hash_hex],
-    ) {
-        eprintln!("[funder] dealer invoice failure update failed: {error}");
+    if let Err(error) = apply_failure(&connection, hash_hex, reason.as_deref()) {
+        eprintln!("database error on failure update: {error}");
     }
     eprintln!("[funder] payment FAILED hash={hash_hex} reason={reason:?}");
 }
@@ -420,4 +473,25 @@ pub fn initiate_payment(parsed: &ParsedInvoice) -> Result<(), LnError> {
         Err(ldk_node::NodeError::DuplicatePayment) => Err(LnError::Duplicate),
         Err(e) => Err(LnError::SendFailed(format!("{e:?}"))),
     }
+}
+
+/// Opens the demo channel from the funder to the dealer. Returns false without
+/// doing anything when one already exists (open or still confirming).
+pub fn open_dealer_channel(amount_sats: u64) -> Result<bool, LnError> {
+    let rt = runtime().ok_or(LnError::NotRunning)?;
+    let dealer_id = rt.dealer.node_id();
+    if rt
+        .funder
+        .list_channels()
+        .iter()
+        .any(|channel| channel.counterparty_node_id == dealer_id)
+    {
+        return Ok(false);
+    }
+    let address = SocketAddress::from_str(&format!("127.0.0.1:{DEALER_PORT}"))
+        .map_err(|e| LnError::Internal(format!("{e:?}")))?;
+    rt.funder
+        .open_channel(dealer_id, address, amount_sats, None, None)
+        .map_err(|e| LnError::SendFailed(format!("{e:?}")))?;
+    Ok(true)
 }

@@ -392,7 +392,7 @@ class _VoucherCard extends StatelessWidget {
                 shape: const RoundedRectangleBorder(
                   borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
                 ),
-                builder: (_) => _RedeemSheet(voucher: voucher),
+                builder: (_) => RedeemSheet(voucher: voucher),
               ),
               style: FilledButton.styleFrom(
                 backgroundColor: AppTheme.forest,
@@ -409,17 +409,18 @@ class _VoucherCard extends StatelessWidget {
 }
 
 /// Bottom sheet that takes a dealer invoice and waits for settlement.
-class _RedeemSheet extends StatefulWidget {
-  const _RedeemSheet({required this.voucher});
+class RedeemSheet extends StatefulWidget {
+  const RedeemSheet({required this.voucher, super.key});
 
   final VoucherRecord voucher;
 
   @override
-  State<_RedeemSheet> createState() => _RedeemSheetState();
+  State<RedeemSheet> createState() => _RedeemSheetState();
 }
 
-class _RedeemSheetState extends State<_RedeemSheet> {
+class _RedeemSheetState extends State<RedeemSheet> {
   final TextEditingController _invoice = TextEditingController();
+  PaymentPreview? _preview;
   PaymentRecord? _result;
   bool _busy = false;
   String? _error;
@@ -430,11 +431,35 @@ class _RedeemSheetState extends State<_RedeemSheet> {
     super.dispose();
   }
 
-  Future<void> _submit() async {
+  /// Shows the dealer and amount. Nothing can be paid until this succeeds.
+  Future<void> _review() async {
+    final strings = AppLocalizations.of(context)!;
     if (_invoice.text.trim().length < 60) {
-      setState(() => _error = 'Paste the complete BOLT11 invoice.');
+      setState(() => _error = strings.voucherQrInvalid);
       return;
     }
+    setState(() {
+      _busy = true;
+      _error = null;
+      _result = null;
+      _preview = null;
+    });
+    try {
+      final preview = await context.read<VoucherProvider>().previewPayment(
+        voucherId: widget.voucher.id,
+        invoice: _invoice.text,
+      );
+      if (!mounted) return;
+      setState(() => _preview = preview);
+    } on NgoApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.message ?? strings.inviteUnavailable);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _submit() async {
     setState(() {
       _busy = true;
       _error = null;
@@ -461,10 +486,8 @@ class _RedeemSheetState extends State<_RedeemSheet> {
       ),
     );
     if (invoice == null || !mounted) return;
-    setState(() {
-      _invoice.text = invoice;
-      _error = null;
-    });
+    _invoice.text = invoice;
+    await _review();
   }
 
   @override
@@ -477,95 +500,180 @@ class _RedeemSheetState extends State<_RedeemSheet> {
         20,
         18 + MediaQuery.of(context).viewInsets.bottom,
       ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              strings.voucherRedeem,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 3),
+            Text(
+              widget.voucher.purpose,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _invoice,
+              readOnly: _busy,
+              onChanged: (_) => setState(() {
+                _preview = null;
+                _result = null;
+                _error = null;
+              }),
+              maxLines: 3,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+              decoration: InputDecoration(
+                border: const OutlineInputBorder(
+                  borderRadius: BorderRadius.all(Radius.circular(14)),
+                ),
+                hintText: strings.voucherRedeemHint,
+              ),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _scanInvoice,
+              icon: const Icon(LucideIcons.scanLine, size: 17),
+              label: Text(strings.voucherScanInvoice),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              strings.voucherRateLabel,
+              style: const TextStyle(color: AppTheme.mutedInk, fontSize: 10),
+            ),
+            const SizedBox(height: 14),
+            if (_busy)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(),
+                      if (_preview != null) ...[
+                        const SizedBox(height: 10),
+                        Text(strings.voucherPayingNow),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            if (_preview != null && !_busy && _result == null) ...[
+              _PaymentReview(preview: _preview!),
+              const SizedBox(height: 10),
+            ],
+            if (_error != null && _result == null && !_busy) ...[
+              Text(
+                _error!,
+                style: const TextStyle(
+                  color: Color(0xFF9B2C22),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+            if (_result != null && !_busy) ...[
+              if (_result!.state == PaymentState.settled)
+                _ResultTile(
+                  color: const Color(0xFFEAF0E7),
+                  icon: LucideIcons.circleCheck,
+                  iconColor: AppTheme.forest,
+                  title: strings.redeemSettled,
+                  body:
+                      '${CurrencyFormatter.ngn(_result!.amountNgn)} · ${_result!.amountSats} sats',
+                )
+              else if (_result!.state == PaymentState.pending)
+                _ResultTile(
+                  color: const Color(0xFFFFF2D9),
+                  icon: LucideIcons.clock,
+                  iconColor: const Color(0xFF77500F),
+                  title: strings.redeemStillPending,
+                  body: strings.redeemStillPendingBody,
+                )
+              else
+                _ResultTile(
+                  color: const Color(0xFFFFE9E6),
+                  icon: LucideIcons.circleAlert,
+                  iconColor: const Color(0xFF9B2C22),
+                  title: _error ?? strings.redeemFailed,
+                  body: strings.redeemFailedBody,
+                ),
+              const SizedBox(height: 4),
+            ],
+            if (!_busy && _result?.state != PaymentState.settled)
+              FilledButton.icon(
+                onPressed: _preview == null ? _review : _submit,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppTheme.forest,
+                  foregroundColor: Colors.white,
+                ),
+                icon: const Icon(LucideIcons.badgeCheck, size: 17),
+                label: Text(
+                  _preview == null
+                      ? strings.voucherReviewAction
+                      : strings.voucherRedeemSubmit,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PaymentReview extends StatelessWidget {
+  const _PaymentReview({required this.preview});
+
+  final PaymentPreview preview;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppLocalizations.of(context)!;
+    Widget row(String label, String value, {bool strong = false}) => Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: Text(label)),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: TextStyle(
+                fontSize: strong ? 18 : 14,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF0E7),
+        borderRadius: BorderRadius.circular(16),
+      ),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            strings.voucherRedeem,
-            style: Theme.of(context).textTheme.titleLarge,
+            strings.voucherReviewTitle,
+            style: const TextStyle(fontWeight: FontWeight.w800),
           ),
-          const SizedBox(height: 3),
-          Text(
-            widget.voucher.purpose,
-            style: Theme.of(context).textTheme.bodyMedium,
+          row(strings.voucherReviewDealer, preview.dealer),
+          row(
+            strings.voucherReviewAmount,
+            CurrencyFormatter.ngn(preview.amountNgn),
+            strong: true,
           ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _invoice,
-            maxLines: 3,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-            decoration: InputDecoration(
-              border: const OutlineInputBorder(
-                borderRadius: BorderRadius.all(Radius.circular(14)),
-              ),
-              hintText: strings.voucherRedeemHint,
-            ),
+          row(
+            strings.voucherReviewLeft,
+            CurrencyFormatter.ngn(preview.availableAfterNgn),
           ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _busy ? null : _scanInvoice,
-            icon: const Icon(LucideIcons.scanLine, size: 17),
-            label: Text(strings.voucherScanInvoice),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            strings.voucherRateLabel,
-            style: const TextStyle(color: AppTheme.mutedInk, fontSize: 10),
-          ),
-          const SizedBox(height: 14),
-          if (_busy)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const CircularProgressIndicator(),
-                    const SizedBox(height: 10),
-                    Text(strings.voucherPayingNow),
-                  ],
-                ),
-              ),
-            ),
-          if (_result != null && !_busy) ...[
-            if (_result!.state == PaymentState.settled)
-              _ResultTile(
-                color: const Color(0xFFEAF0E7),
-                icon: LucideIcons.circleCheck,
-                iconColor: AppTheme.forest,
-                title: strings.redeemSettled,
-                body:
-                    '${CurrencyFormatter.ngn(_result!.amountNgn)} · ${_result!.amountSats} sats',
-              )
-            else if (_result!.state == PaymentState.pending)
-              _ResultTile(
-                color: const Color(0xFFFFF2D9),
-                icon: LucideIcons.clock,
-                iconColor: const Color(0xFF77500F),
-                title: strings.redeemStillPending,
-                body: strings.redeemStillPendingBody,
-              )
-            else
-              _ResultTile(
-                color: const Color(0xFFFFE9E6),
-                icon: LucideIcons.circleAlert,
-                iconColor: const Color(0xFF9B2C22),
-                title: _error ?? strings.redeemFailed,
-                body: strings.redeemFailedBody,
-              ),
-            const SizedBox(height: 4),
-          ],
-          if (!_busy)
-            FilledButton.icon(
-              onPressed: _submit,
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTheme.forest,
-                foregroundColor: Colors.white,
-              ),
-              icon: const Icon(LucideIcons.badgeCheck, size: 17),
-              label: Text(strings.voucherRedeemSubmit),
-            ),
         ],
       ),
     );

@@ -234,6 +234,27 @@ class AppLocalizationsHa extends AppLocalizations {
   String get voucherRedeemSubmit => 'Biya shagon';
 
   @override
+  String get voucherReviewAction => 'Duba biyan';
+
+  @override
+  String get voucherReviewTitle => 'Duba kafin ka biya';
+
+  @override
+  String get voucherReviewDealer => 'Shago';
+
+  @override
+  String get voucherReviewAmount => 'Adadi';
+
+  @override
+  String get voucherReviewLeft => 'Abin da zai rage a kupon bayan biya';
+
+  @override
+  String get historyKindSupport => 'Tallafi';
+
+  @override
+  String get historyKindPayment => 'Biya';
+
+  @override
   String get voucherRateLabel => 'Farashin misali: naira 5 a kowace sat. Mutinynet cibiyar gwaji ce.';
 
   @override
